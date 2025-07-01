@@ -46,6 +46,12 @@ You need to set these environment variables in your Render dashboard:
 | `NODE_ENV` | Environment (set to `production`) | ✅ |
 | `PORT` | Port number (Render sets this automatically) | ❌ |
 
+## 📋 Requirements
+
+- **Node.js**: Version 18.20.5 (specified in package.json)
+- **npm**: Latest version
+- **API Keys**: ElevenLabs and Anthropic Claude
+
 ## 📁 Project Structure
 
 ```

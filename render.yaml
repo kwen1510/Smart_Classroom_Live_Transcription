@@ -15,4 +15,5 @@ services:
       - key: ANTHROPIC_KEY
         sync: false
     healthCheckPath: /admin
-    autoDeploy: true 
+    autoDeploy: true
+    nodeVersion: 18.20.5 
