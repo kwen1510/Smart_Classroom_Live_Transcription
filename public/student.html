@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student View - Smart Classroom</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'slide-in': 'slideIn 0.3s ease-out'
+                    }
+                }
+            }
+        }
+    </script>
+  <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .new-transcript { animation: slideIn 0.3s ease-out; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Join Form -->
+    <div id="joinForm" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4">
+        <div class="max-w-md w-full">
+            <div class="text-center mb-8">
+                <div class="w-20 h-20 mx-auto bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center mb-4">
+                    <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                    </svg>
+                </div>
+                <h1 class="text-3xl font-bold text-gray-900 mb-2">Smart Classroom</h1>
+                <p class="text-gray-600">Join your group session to start learning</p>
+            </div>
+            
+            <div class="bg-white rounded-2xl shadow-xl p-8">
+                <div class="space-y-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Session Code</label>
+                        <input type="text" id="sessionCode" placeholder="Enter 6-digit code" maxlength="6" 
+                               class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-center text-lg font-mono tracking-widest">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Group Number</label>
+                        <input type="number" id="groupNumber" placeholder="Your group number" min="1" max="99"
+                               class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-center text-lg">
+                    </div>
+                    <button id="joinBtn" class="w-full bg-gradient-to-r from-indigo-500 to-purple-600 text-white py-3 px-6 rounded-lg font-semibold hover:from-indigo-600 hover:to-purple-700 transition-all duration-200 transform hover:scale-105 shadow-lg">
+                        Join Session
+                    </button>
+                </div>
+                <div id="error" class="hidden mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <div class="flex">
+                        <svg class="w-5 h-5 text-red-400 mt-0.5 mr-3" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"/>
+                        </svg>
+                        <span id="errorText" class="text-red-800 text-sm"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="content" class="hidden min-h-screen flex flex-col">
+        <!-- Header -->
+        <header class="gradient-bg text-white shadow-xl">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-4">
+                        <div class="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
+                            <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <h1 class="text-lg font-semibold">Session: <span id="activeSession" class="font-mono">-</span></h1>
+                            <p class="text-white/80 text-sm">Group: <span id="activeGroup">-</span></p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <a href="/history" class="bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-lg transition-colors text-sm">📚 History</a>
+                        <div id="status" class="flex items-center space-x-2 bg-white/20 px-4 py-2 rounded-full">
+                            <div class="w-2 h-2 bg-orange-300 rounded-full"></div>
+                            <span class="text-sm font-medium">Waiting...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 h-full">
+                <!-- Live Transcription Panel -->
+                <div class="bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col">
+                    <div class="p-6 border-b border-gray-100">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                                    <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+                                    </svg>
+                                </div>
+                                <h2 class="text-lg font-semibold text-gray-900">Live Transcription</h2>
+                            </div>
+                            <button 
+                                id="toggleTranscripts"
+                                onclick="toggleTranscriptHistory()"
+                                class="flex items-center text-gray-600 hover:text-gray-900 text-sm transition-colors duration-200"
+                            >
+                                <svg id="toggleIcon" class="w-4 h-4 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                                <span class="ml-2" id="toggleText">Show History</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="transcriptionArea" class="flex-1 p-6 overflow-y-auto min-h-96">
+                        <!-- Most recent transcript will be shown by default -->
+                        <div id="latestTranscript" class="mb-4">
+                            <div class="text-center py-12 text-gray-500">
+                                <svg class="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                                </svg>
+                                <p class="text-lg font-medium mb-2">No transcription yet</p>
+                                <p class="text-sm">Audio will be transcribed here when recording starts</p>
+                            </div>
+                        </div>
+                        <!-- Transcript history (initially hidden) -->
+                        <div id="transcriptHistory" class="hidden space-y-4">
+                            <div class="border-t pt-4">
+                                <h3 class="text-sm font-medium text-gray-700 mb-3">Previous Transcripts</h3>
+                                <div id="olderTranscripts" class="space-y-3">
+                                    <!-- Older transcripts will be added here -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Discussion Summary Panel -->
+                <div class="bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col">
+                    <div class="p-6 border-b border-gray-100">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
+                                    <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                    </svg>
+                                </div>
+                                <h2 class="text-lg font-semibold text-gray-900">Discussion Summary</h2>
+                            </div>
+                            <div id="summaryTimestamp" class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded hidden">
+                                Updated now
+                            </div>
+                        </div>
+                    </div>
+                    <div id="summaryArea" class="flex-1 p-6 min-h-96">
+                        <div class="text-center py-12 text-gray-500">
+                            <svg class="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+                            </svg>
+                            <p class="text-lg font-medium mb-2">No summary available</p>
+                            <p class="text-sm">Discussion summary will appear here as you talk</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+  <script>
+    const socket = io();
+        let isRecording = false;
+        let rec, stream;
+
+        // DOM Elements
+        const joinForm = document.getElementById('joinForm');
+        const content = document.getElementById('content');
+        const error = document.getElementById('error');
+        const errorText = document.getElementById('errorText');
+        const status = document.getElementById('status');
+        const transcriptionArea = document.getElementById('transcriptionArea');
+        const summaryArea = document.getElementById('summaryArea');
+        const summaryTimestamp = document.getElementById('summaryTimestamp');
+
+        // Format timestamp
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // Show error message
+        function showError(message) {
+            errorText.textContent = message;
+            error.classList.remove('hidden');
+            setTimeout(() => {
+                error.classList.add('hidden');
+            }, 5000);
+        }
+
+        // Update recording status
+        function updateStatus(isRecording, text = null) {
+            const statusEl = document.getElementById('status');
+            if (isRecording) {
+                statusEl.innerHTML = `
+                    <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                    <span class="text-sm font-medium">Recording</span>
+                `;
+                statusEl.className = 'flex items-center space-x-2 bg-green-500/20 px-4 py-2 rounded-full';
+            } else {
+                statusEl.innerHTML = `
+                    <div class="w-2 h-2 bg-orange-300 rounded-full"></div>
+                    <span class="text-sm font-medium">${text || 'Waiting...'}</span>
+                `;
+                statusEl.className = 'flex items-center space-x-2 bg-white/20 px-4 py-2 rounded-full';
+            }
+        }
+
+        // Join session
+        document.getElementById('joinBtn').addEventListener('click', () => {
+            const code = document.getElementById('sessionCode').value.trim();
+            const group = parseInt(document.getElementById('groupNumber').value);
+
+            if (!code || !group) {
+                showError('Please enter both session code and group number');
+                return;
+            }
+
+            socket.emit('join', { code, group });
+            console.log(`Attempting to join session ${code}, group ${group}`);
+        });
+
+        // Socket event handlers
+        socket.on('joined', ({ code, group, status }) => {
+            console.log(`Joined session ${code}, group ${group} (status: ${status})`);
+            
+            // Update UI
+            document.getElementById('activeSession').textContent = code;
+            document.getElementById('activeGroup').textContent = group;
+            joinForm.classList.add('hidden');
+            content.classList.remove('hidden');
+            
+            if (status === 'recording') {
+                updateStatus(true);
+            } else {
+                updateStatus(false, 'Waiting for teacher to start');
+            }
+        });
+
+        socket.on('error', (msg) => {
+            showError(msg);
+        });
+
+        socket.on('record_now', async (interval) => {
+            console.log(`Starting recording with ${interval}ms interval`);
+            try {
+                // Stop any existing recording first
+                if (rec && rec.state !== "inactive") {
+                    rec.stop();
+                }
+                if (stream) {
+                    stream.getTracks().forEach(t => t.stop());
+                }
+                
+                // Request microphone access
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                console.log("🎵 Microphone access granted");
+                
+                // Setup MediaRecorder
+        rec = new MediaRecorder(stream, { mimeType: "audio/webm" });
+        rec.ondataavailable = async e => {
+                    if (isRecording && socket.connected) {
+          const buf = await e.data.arrayBuffer();
+                        console.log(`📡 Sending audio chunk: ${buf.byteLength} bytes`);
+          socket.emit("student:chunk", { data: buf });
+                    }
+                };
+                
+                // Start recording with interval
+                rec.start(interval / 4);
+                isRecording = true;
+                updateStatus(true);
+                console.log("✅ Recording started successfully");
+      } catch (err) {
+                console.error("❌ Microphone error:", err);
+                showError("Microphone access denied. Please allow microphone access and try again.");
+                isRecording = false;
+                updateStatus(false, 'Microphone access denied');
+            }
+        });
+
+        socket.on('stop_recording', () => {
+            console.log('Stopping recording');
+            if (rec && rec.state !== "inactive") {
+                rec.stop();
+                console.log("🛑 MediaRecorder stopped");
+            }
+            if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+                console.log("🔇 Audio tracks stopped");
+            }
+            isRecording = false;
+            updateStatus(false, 'Recording stopped');
+        });
+
+        socket.on('transcription_and_summary', (data) => {
+            console.log('Received transcription and summary update:', data);
+            
+            if (data.transcription) {
+                // Clear empty state if present
+                const latestTranscript = document.getElementById('latestTranscript');
+                if (latestTranscript.querySelector('.text-center')) {
+                    latestTranscript.innerHTML = '';
+                }
+                
+                // Move current latest to history if it exists
+                const currentLatest = latestTranscript.querySelector('.transcript-item');
+                if (currentLatest) {
+                    const olderTranscripts = document.getElementById('olderTranscripts');
+                    olderTranscripts.insertBefore(currentLatest, olderTranscripts.firstChild);
+                    
+                    // Keep only last 10 in history
+                    while (olderTranscripts.children.length > 10) {
+                        olderTranscripts.removeChild(olderTranscripts.lastChild);
+                    }
+                }
+                
+                // Create new latest transcript
+                const transcriptDiv = document.createElement('div');
+                transcriptDiv.className = 'transcript-item new-transcript bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border-l-4 border-blue-400 transition-all duration-300';
+                
+                // Add "Latest" badge and content
+                transcriptDiv.innerHTML = `
+                    <div class="flex items-center mb-3">
+                        <span class="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-1 rounded uppercase tracking-wide">Latest</span>
+                        <span class="ml-2 text-xs text-gray-500">${formatTime(data.transcription.duration || 0)}</span>
+                    </div>
+                    <div class="transcript-content mb-3">
+                        ${data.transcription.words && data.transcription.words.length > 0 ? 
+                            data.transcription.words.map(word => 
+                                `<span class="inline-block hover:bg-blue-200 cursor-pointer px-1 py-0.5 rounded transition-colors duration-150" title="${formatTime(word.start)} - ${formatTime(word.end)}">${word.text} </span>`
+                            ).join('') :
+                            `<div class="text-gray-800 leading-relaxed">${data.transcription.text}</div>`
+                        }
+                    </div>
+                    <div class="text-xs text-gray-500 flex items-center justify-between">
+                        <span class="flex items-center">
+                            <svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z"/>
+                            </svg>
+                            ${new Date().toLocaleTimeString()}
+                        </span>
+                        <span>${data.transcription.wordCount || data.transcription.words?.length || 0} words</span>
+                    </div>
+                `;
+                
+                // Add to latest transcript area
+                latestTranscript.appendChild(transcriptDiv);
+                
+                // Remove animation class after animation
+                setTimeout(() => {
+                    transcriptDiv.classList.remove('new-transcript');
+                }, 300);
+            }
+            
+            if (data.summary) {
+                // Update summary
+                summaryArea.innerHTML = `
+                    <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-6 border-l-4 border-purple-400 h-full">
+                        <div class="prose prose-purple max-w-none">
+                            <div class="text-gray-800 leading-relaxed whitespace-pre-line">${data.summary}</div>
+                        </div>
+                    </div>
+                `;
+                
+                // Show and update timestamp
+                summaryTimestamp.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+                summaryTimestamp.classList.remove('hidden');
+            }
+        });
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (rec && rec.state !== "inactive") {
+                rec.stop();
+            }
+            if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+            }
+        });
+
+        // Auto-focus session code input
+        document.getElementById('sessionCode').focus();
+
+        // Handle Enter key in inputs
+        document.getElementById('sessionCode').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('groupNumber').focus();
+            }
+        });
+
+        document.getElementById('groupNumber').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('joinBtn').click();
+            }
+        });
+
+        function toggleTranscriptHistory() {
+            const transcriptHistory = document.getElementById('transcriptHistory');
+            const toggleIcon = document.getElementById('toggleIcon');
+            const toggleText = document.getElementById('toggleText');
+
+            if (transcriptHistory.classList.contains('hidden')) {
+                transcriptHistory.classList.remove('hidden');
+                toggleIcon.classList.remove('rotate-180');
+                toggleText.textContent = 'Hide History';
+            } else {
+                transcriptHistory.classList.add('hidden');
+                toggleIcon.classList.add('rotate-180');
+                toggleText.textContent = 'Show History';
+            }
+        }
+  </script>
+</body>
+</html>
