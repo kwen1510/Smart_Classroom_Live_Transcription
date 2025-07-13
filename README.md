@@ -20,6 +20,7 @@ This is the deployment-ready version of the Smart Classroom Live Transcription s
 6. **Add Environment Variables:**
    - `ELEVENLABS_KEY` - Your ElevenLabs API key
    - `ANTHROPIC_KEY` - Your Anthropic Claude API key
+   - `MONGO_DB_PASSWORD` - Your MongoDB Atlas password
    - `NODE_ENV` - `production`
    - `PORT` - `10000` (Render will override this)
 
@@ -43,6 +44,7 @@ You need to set these environment variables in your Render dashboard:
 |----------|-------------|----------|
 | `ELEVENLABS_KEY` | Your ElevenLabs API key for transcription | ✅ |
 | `ANTHROPIC_KEY` | Your Anthropic Claude API key for summarization | ✅ |
+| `MONGO_DB_PASSWORD` | Your MongoDB Atlas password | ✅ |
 | `NODE_ENV` | Environment (set to `production`) | ✅ |
 | `PORT` | Port number (Render sets this automatically) | ❌ |
 
@@ -51,6 +53,7 @@ You need to set these environment variables in your Render dashboard:
 - **Node.js**: Version 18.20.5 (specified in package.json)
 - **npm**: Latest version
 - **API Keys**: ElevenLabs and Anthropic Claude
+- **MongoDB Atlas**: Cloud database (free tier available)
 
 ## 📁 Project Structure
 
@@ -81,6 +84,7 @@ After deployment, your app will be available at:
 - **Free Tier**: 750 hours/month (enough for most use cases)
 - **Paid Plans**: Start at $7/month for unlimited usage
 - **API Costs**: You pay for ElevenLabs and Anthropic API usage separately
+- **MongoDB Atlas**: Free tier available (512MB storage)
 
 ## 🔄 Updates
 
@@ -97,7 +101,7 @@ To run locally before deploying:
 cd render-deployment
 npm install
 cp .env.example .env  # Create your .env file
-# Edit .env with your API keys
+# Edit .env with your API keys and MongoDB password
 npm start
 ```
 
@@ -108,7 +112,7 @@ npm start
 1. **Build fails**: Check that all dependencies are in `package.json`
 2. **App crashes**: Check the logs in Render dashboard
 3. **API errors**: Verify your API keys are set correctly
-4. **Database issues**: SQLite file is created automatically
+4. **Database connection issues**: Verify your MongoDB password is correct
 
 ### Logs:
 - **View logs** in the Render dashboard under your service
@@ -125,7 +129,7 @@ If you encounter issues:
 ## 🔒 Security Notes
 
 - **API keys** are stored securely in Render environment variables
-- **Database** (SQLite) is ephemeral on free tier - data may be lost on restarts
+- **MongoDB Atlas** provides persistent cloud storage
 - **HTTPS** is automatically enabled on Render
 - **No sensitive data** should be committed to the repository
 

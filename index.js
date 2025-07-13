@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import Database from "better-sqlite3";
+import { MongoClient, ServerApiVersion } from 'mongodb';
 import { v4 as uuid } from "uuid";
 import fetch from "node-fetch";
 import path from "path";
@@ -24,73 +24,47 @@ const elevenlabs = new ElevenLabsClient({
 const activeSessions = new Map(); // sessionCode -> { id, code, active, interval, startTime }
 const sessionTimers = new Map();  // sessionCode -> timer
 
-/* ---------- 1. SQLite ---------- */
-const db = new Database("db.sqlite");
-console.log("📦 Database connected");
+/* ---------- 1. MongoDB ---------- */
+const uri = `mongodb+srv://${process.env.MONGO_DB_USERNAME}:${process.env.MONGO_DB_PASSWORD}@cluster0.bwtbeur.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
-// Migration: Add active column if it doesn't exist
-try {
-  db.prepare('ALTER TABLE sessions ADD COLUMN active INTEGER DEFAULT 0').run();
-  console.log("✅ Added 'active' column to sessions table");
-} catch (e) {
-  console.log("ℹ️  'active' column already exists in sessions table");
+// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  }
+});
+
+let db;
+
+async function connectToDatabase() {
+  try {
+    // Connect the client to the server
+    await client.connect();
+    db = client.db("SMART_CLASSROOM_LIVE_SUMMARY");
+    console.log("📦 MongoDB connected");
+    
+    // Create indexes for better performance
+    await db.collection("sessions").createIndex({ "code": 1 }, { unique: true });
+    await db.collection("groups").createIndex({ "session_id": 1, "number": 1 }, { unique: true });
+    await db.collection("transcripts").createIndex({ "group_id": 1, "created_at": 1 });
+    await db.collection("transcripts").createIndex({ "group_id": 1, "segment_number": 1 });
+    await db.collection("summaries").createIndex({ "group_id": 1 }, { unique: true });
+    await db.collection("session_prompts").createIndex({ "session_id": 1 }, { unique: true });
+    
+    console.log("📊 Database indexes ready");
+
+    // Start server ONLY after DB is ready!
+    http.listen(8080, () => console.log("🎯 Server running at http://localhost:8080"));
+  } catch (error) {
+    console.error("❌ Failed to connect to MongoDB:", error);
+    process.exit(1);
+  }
 }
 
-// Migration: Add new transcript columns if they don't exist
-try {
-  db.prepare('ALTER TABLE transcripts ADD COLUMN word_count INTEGER DEFAULT 0').run();
-  db.prepare('ALTER TABLE transcripts ADD COLUMN duration_seconds REAL DEFAULT 0').run();
-  db.prepare('ALTER TABLE transcripts ADD COLUMN segment_number INTEGER DEFAULT 0').run();
-  console.log("✅ Added new columns to transcripts table");
-} catch (e) {
-  console.log("ℹ️  New transcript columns already exist");
-}
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY,
-  code TEXT UNIQUE,
-  interval_ms INTEGER DEFAULT 10000,
-  created_at INTEGER,
-  active INTEGER DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS groups (
-  id TEXT PRIMARY KEY,
-  session_id TEXT,
-  number INTEGER,
-  UNIQUE(session_id, number)
-);
-
-CREATE TABLE IF NOT EXISTS transcripts (
-  id TEXT PRIMARY KEY,
-  group_id TEXT,
-  text TEXT,
-  word_count INTEGER DEFAULT 0,
-  duration_seconds REAL DEFAULT 0,
-  segment_number INTEGER DEFAULT 0,
-  created_at INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS summaries (
-  group_id TEXT PRIMARY KEY,
-  text TEXT,
-  updated_at INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS session_prompts (
-  session_id TEXT PRIMARY KEY,
-  prompt TEXT,
-  updated_at INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_transcripts_group_created 
-ON transcripts(group_id, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_transcripts_segment 
-ON transcripts(group_id, segment_number);
-`);
-console.log("📊 Database tables ready");
+// Connect to database on startup
+connectToDatabase();
 
 /* ---------- 2. Express + Socket.IO ---------- */
 const app = express();
@@ -121,103 +95,10 @@ app.get("/test-transcription", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "test-transcription.html"));
 });
 
-/* Serve database viewer page */
-app.get("/database", (req, res) => {
-  console.log("🗄️ Serving database viewer page");
-  res.send(`
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Database Viewer - Smart Classroom</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-    </style>
-</head>
-<body class="bg-gray-50 min-h-screen">
-    <header class="gradient-bg text-white shadow-xl">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <div class="flex items-center justify-between">
-                <div class="flex items-center space-x-4">
-                    <div class="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
-                        <svg class="w-7 h-7" fill="currentColor" viewBox="0 0 20 20">
-                            <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/>
-                        </svg>
-                    </div>
-                    <div>
-                        <h1 class="text-2xl font-bold">Database Viewer</h1>
-                        <p class="text-white/80">Smart Classroom System Data</p>
-                    </div>
-                </div>
-                <div class="flex space-x-4">
-                    <a href="/admin" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors">Admin</a>
-                    <a href="/student" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors">Student</a>
-                    <a href="/history" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors">History</a>
-                </div>
-            </div>
-        </div>
-    </header>
-
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div class="text-center py-16">
-            <div class="w-24 h-24 mx-auto bg-gradient-to-br from-blue-100 to-indigo-200 rounded-full flex items-center justify-center mb-6">
-                <svg class="w-12 h-12 text-indigo-600" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/>
-                </svg>
-            </div>
-            <h3 class="text-xl font-semibold text-gray-900 mb-4">Database Viewer</h3>
-            <p class="text-gray-600 max-w-md mx-auto mb-8">This is a raw database viewer for technical debugging. For a better user experience, try the dedicated History page.</p>
-            <div class="flex justify-center space-x-4">
-                <a href="/history" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors">
-                    📚 Go to History Page
-                </a>
-                <button onclick="loadRawData()" class="bg-gray-600 hover:bg-gray-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors">
-                    🛠️ Load Raw Data
-                </button>
-            </div>
-        </div>
-
-        <div id="rawData" class="hidden space-y-6">
-            <!-- Raw data will be loaded here -->
-        </div>
-    </main>
-
-    <script>
-        async function loadRawData() {
-            const rawDataDiv = document.getElementById('rawData');
-            rawDataDiv.classList.remove('hidden');
-            
-            try {
-                const response = await fetch('/api/history?includeTranscripts=true&includeSummaries=true&limit=10');
-                const data = await response.json();
-                
-                rawDataDiv.innerHTML = \`
-                    <div class="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
-                        <div class="px-6 py-4 bg-gray-50 border-b border-gray-200">
-                            <h3 class="text-lg font-semibold text-gray-900">Raw Database Data</h3>
-                        </div>
-                        <div class="p-6">
-                            <pre class="bg-gray-100 rounded-lg p-4 text-sm overflow-auto max-h-96">\${JSON.stringify(data, null, 2)}</pre>
-                        </div>
-                    </div>
-                \`;
-            } catch (error) {
-                rawDataDiv.innerHTML = \`
-                    <div class="bg-red-50 border border-red-200 rounded-lg p-6">
-                        <h3 class="text-lg font-semibold text-red-800 mb-2">Error Loading Data</h3>
-                        <p class="text-red-600">\${error.message}</p>
-                    </div>
-                \`;
-            }
-        }
-    </script>
-</body>
-</html>
-  `);
+/* Serve test recording page */
+app.get("/test-recording", (req, res) => {
+  console.log("🧪 Serving test recording page");
+  res.sendFile(path.join(__dirname, "test-recording.html"));
 });
 
 /* Serve history page */
@@ -235,8 +116,18 @@ app.get("/history", (req, res) => {
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; }
         .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-        .session-card { transition: all 0.3s ease; }
-        .session-card:hover { transform: translateY(-2px); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); }
+        .session-card { 
+            transition: all 0.3s ease; 
+            position: relative;
+        }
+        .session-card:hover { 
+            transform: translateY(-2px); 
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); 
+        }
+        .session-card.selected {
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+        }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -257,7 +148,6 @@ app.get("/history", (req, res) => {
                 <div class="flex space-x-4">
                     <a href="/admin" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors">👨‍🏫 Admin</a>
                     <a href="/student" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors">👨‍🎓 Student</a>
-                    <a href="/database" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors">🗄️ Database</a>
                 </div>
             </div>
         </div>
@@ -300,6 +190,40 @@ app.get("/history", (req, res) => {
                     </button>
                     <button onclick="clearSearch()" class="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors">
                         🗑️ Clear
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Selection Toolbar -->
+        <div id="selectionToolbar" class="hidden bg-white rounded-xl shadow-lg border border-gray-200 p-4 mb-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-2">
+                        <input 
+                            type="checkbox" 
+                            id="selectAll" 
+                            onchange="toggleSelectAll()"
+                            class="w-4 h-4 text-indigo-600 bg-gray-100 border-gray-300 rounded focus:ring-indigo-500"
+                        >
+                        <label for="selectAll" class="text-sm font-medium text-gray-700">Select All</label>
+                    </div>
+                    <div id="selectionCount" class="text-sm text-gray-600">0 sessions selected</div>
+                </div>
+                <div class="flex space-x-3">
+                    <button 
+                        onclick="clearSelection()" 
+                        class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                    >
+                        Clear Selection
+                    </button>
+                    <button 
+                        onclick="deleteSelectedSessions()" 
+                        class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                        id="deleteSelectedBtn"
+                        disabled
+                    >
+                        🗑️ Delete Selected
                     </button>
                 </div>
             </div>
@@ -401,10 +325,22 @@ app.get("/history", (req, res) => {
             }
 
             container.innerHTML = data.sessions.map(session => \`
-                <div class="session-card bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden cursor-pointer" 
-                     onclick="viewSessionDetails('\${session.code}')">
-                    <div class="p-6">
-                        <div class="flex items-center justify-between mb-4">
+                <div class="session-card bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden transition-all duration-300 hover:shadow-xl" 
+                     data-session-code="\${session.code}">
+                    <!-- Selection Checkbox -->
+                    <div class="absolute top-3 left-3 z-10">
+                        <input 
+                            type="checkbox" 
+                            class="session-checkbox w-5 h-5 text-indigo-600 bg-white border-2 border-gray-300 rounded focus:ring-indigo-500 shadow-sm"
+                            data-session-code="\${session.code}"
+                            onchange="updateSelection()"
+                            onclick="event.stopPropagation()"
+                        >
+                    </div>
+                    
+                    <!-- Card Content -->
+                    <div class="p-6 cursor-pointer" onclick="viewSessionDetails('\${session.code}')">
+                        <div class="flex items-center justify-between mb-4 ml-8">
                             <div class="flex items-center space-x-3">
                                 <div class="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center">
                                     <span class="text-white font-bold text-lg">\${session.code.slice(-2)}</span>
@@ -447,11 +383,19 @@ app.get("/history", (req, res) => {
                     <div class="px-6 py-3 bg-gray-50 border-t border-gray-200">
                         <div class="flex items-center justify-between">
                             <span class="text-sm text-gray-600">Interval: \${session.interval_seconds}s</span>
-                            <span class="text-indigo-600 font-medium text-sm">View Details →</span>
+                            <button 
+                                onclick="viewSessionDetails('\${session.code}')" 
+                                class="text-indigo-600 hover:text-indigo-800 font-medium text-sm transition-colors"
+                            >
+                                View Details →
+                            </button>
                         </div>
                     </div>
                 </div>
             \`).join('');
+            
+            // Update selection state
+            updateSelection();
         }
 
         function displayPagination(pagination) {
@@ -604,23 +548,65 @@ app.get("/history", (req, res) => {
                                             \` : ''}
                                             
                                             <div>
-                                                <h5 class="font-medium text-gray-900 mb-2">Recent Transcripts</h5>
-                                                <div class="space-y-2 max-h-32 overflow-y-auto">
-                                                    \${group.transcripts.slice(0, 3).map(transcript => \`
-                                                        <div class="bg-gray-50 rounded p-3 text-sm">
-                                                            <div class="text-gray-800 mb-1">\${transcript.text}</div>
-                                                            <div class="text-xs text-gray-500">
-                                                                \${new Date(transcript.created_at).toLocaleString()} • 
-                                                                \${transcript.word_count} words • 
-                                                                \${transcript.duration_seconds ? transcript.duration_seconds.toFixed(1) + 's' : 'No duration'}
-                                                            </div>
-                                                        </div>
-                                                    \`).join('')}
-                                                    \${group.transcripts.length > 3 ? \`
-                                                        <div class="text-center text-sm text-gray-500 py-2">
-                                                            ... and \${group.transcripts.length - 3} more transcripts
-                                                        </div>
-                                                    \` : ''}
+                                                <h5 class="font-medium text-gray-900 mb-2">Transcripts</h5>
+                                                <div class="space-y-3">
+                                                    \${(() => {
+                                                        const transcripts = group.transcripts || [];
+                                                        const latestTranscript = transcripts.length ? transcripts[transcripts.length - 1] : null;
+                                                        const previousTranscripts = transcripts.length > 1 ? transcripts.slice(0, -1).reverse() : [];
+                                                        
+                                                        let html = '';
+                                                        
+                                                        // Show latest transcript at the top (highlighted)
+                                                        if (latestTranscript) {
+                                                            html += \`
+                                                                <div class="bg-blue-50 rounded-lg p-4 border-l-4 border-blue-400 mb-4">
+                                                                    <div class="flex items-center mb-2">
+                                                                        <span class="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-1 rounded uppercase tracking-wide">Latest Transcript</span>
+                                                                        <span class="ml-2 text-xs text-gray-500">\${latestTranscript.duration_seconds ? \`\${latestTranscript.duration_seconds.toFixed(1)}s\` : 'Unknown duration'}</span>
+                                                                    </div>
+                                                                    <div class="text-gray-800 mb-2 font-medium leading-relaxed">\${latestTranscript.text}</div>
+                                                                    <div class="flex items-center justify-between text-xs text-gray-500">
+                                                                        <span>\${new Date(latestTranscript.created_at).toLocaleString()}</span>
+                                                                        <span>\${latestTranscript.word_count || 0} words</span>
+                                                                    </div>
+                                                                </div>
+                                                            \`;
+                                                        }
+                                                        
+                                                        // Show previous transcripts below
+                                                        if (previousTranscripts.length > 0) {
+                                                            html += \`
+                                                                <h6 class="text-xs font-semibold text-gray-500 mb-2">Previous Transcripts (\${previousTranscripts.length})</h6>
+                                                                <div class="space-y-2 max-h-48 overflow-y-auto">
+                                                                    \${previousTranscripts.map(transcript => \`
+                                                                        <div class="bg-gray-50 rounded p-3 text-sm">
+                                                                            <div class="text-gray-800 mb-1">\${transcript.text}</div>
+                                                                            <div class="text-xs text-gray-500">
+                                                                                \${new Date(transcript.created_at).toLocaleString()} • 
+                                                                                \${transcript.word_count || 0} words • 
+                                                                                \${transcript.duration_seconds ? transcript.duration_seconds.toFixed(1) + 's' : 'No duration'}
+                                                                            </div>
+                                                                        </div>
+                                                                    \`).join('')}
+                                                                </div>
+                                                            \`;
+                                                        }
+                                                        
+                                                        // Show empty state if no transcripts
+                                                        if (!latestTranscript && previousTranscripts.length === 0) {
+                                                            html += \`
+                                                                <div class="text-center py-4 text-gray-500">
+                                                                    <svg class="w-8 h-8 mx-auto mb-2 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+                                                                    </svg>
+                                                                    <p class="text-sm">No transcripts available</p>
+                                                                </div>
+                                                            \`;
+                                                        }
+                                                        
+                                                        return html;
+                                                    })()}
                                                 </div>
                                             </div>
                                         </div>
@@ -678,6 +664,130 @@ app.get("/history", (req, res) => {
                 searchSessions();
             }
         });
+
+        // Selection and Deletion Functions
+        function updateSelection() {
+            const checkboxes = document.querySelectorAll('.session-checkbox');
+            const checkedBoxes = document.querySelectorAll('.session-checkbox:checked');
+            const selectAllCheckbox = document.getElementById('selectAll');
+            const selectionToolbar = document.getElementById('selectionToolbar');
+            const selectionCount = document.getElementById('selectionCount');
+            const deleteBtn = document.getElementById('deleteSelectedBtn');
+
+            // Update visual state of session cards
+            checkboxes.forEach(checkbox => {
+                const sessionCard = checkbox.closest('.session-card');
+                if (checkbox.checked) {
+                    sessionCard.classList.add('selected');
+                } else {
+                    sessionCard.classList.remove('selected');
+                }
+            });
+
+            // Update select all checkbox state
+            if (checkedBoxes.length === 0) {
+                selectAllCheckbox.indeterminate = false;
+                selectAllCheckbox.checked = false;
+            } else if (checkedBoxes.length === checkboxes.length) {
+                selectAllCheckbox.indeterminate = false;
+                selectAllCheckbox.checked = true;
+            } else {
+                selectAllCheckbox.indeterminate = true;
+                selectAllCheckbox.checked = false;
+            }
+
+            // Show/hide selection toolbar
+            if (checkedBoxes.length > 0) {
+                selectionToolbar.classList.remove('hidden');
+                selectionCount.textContent = \`\${checkedBoxes.length} session\${checkedBoxes.length === 1 ? '' : 's'} selected\`;
+                deleteBtn.disabled = false;
+                deleteBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            } else {
+                selectionToolbar.classList.add('hidden');
+                deleteBtn.disabled = true;
+                deleteBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            }
+        }
+
+        function toggleSelectAll() {
+            const selectAllCheckbox = document.getElementById('selectAll');
+            const checkboxes = document.querySelectorAll('.session-checkbox');
+            
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = selectAllCheckbox.checked;
+            });
+            
+            updateSelection();
+        }
+
+        function clearSelection() {
+            const checkboxes = document.querySelectorAll('.session-checkbox');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            updateSelection();
+        }
+
+        async function deleteSelectedSessions() {
+            const checkedBoxes = document.querySelectorAll('.session-checkbox:checked');
+            const selectedCodes = Array.from(checkedBoxes).map(cb => cb.dataset.sessionCode);
+            
+            if (selectedCodes.length === 0) {
+                return;
+            }
+
+            // Show confirmation dialog
+            const confirmMessage = \`Are you sure you want to delete \${selectedCodes.length} session\${selectedCodes.length === 1 ? '' : 's'}?\\n\\nThis will permanently delete:\\n- All session data\\n- All groups and transcripts\\n- All summaries\\n\\nThis action cannot be undone.\`;
+            
+            if (!confirm(confirmMessage)) {
+                return;
+            }
+
+            try {
+                // Show loading state
+                const deleteBtn = document.getElementById('deleteSelectedBtn');
+                const originalText = deleteBtn.innerHTML;
+                deleteBtn.innerHTML = '⏳ Deleting...';
+                deleteBtn.disabled = true;
+
+                // Delete sessions
+                const response = await fetch('/api/sessions', {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        sessionCodes: selectedCodes
+                    })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    // Show success message
+                    alert(\`Successfully deleted \${result.deletedCounts.sessions} sessions and all related data:\\n\\n\` +
+                          \`- \${result.deletedCounts.transcripts} transcripts\\n\` +
+                          \`- \${result.deletedCounts.summaries} summaries\\n\` +
+                          \`- \${result.deletedCounts.groups} groups\\n\` +
+                          \`- \${result.deletedCounts.session_prompts} prompts\`);
+                    
+                    // Reload sessions
+                    loadSessions(currentPage, currentFilters);
+                    clearSelection();
+                } else {
+                    throw new Error(result.error || 'Delete failed');
+                }
+
+            } catch (error) {
+                console.error('Delete error:', error);
+                alert(\`Failed to delete sessions: \${error.message}\`);
+            } finally {
+                // Restore button state
+                const deleteBtn = document.getElementById('deleteSelectedBtn');
+                deleteBtn.innerHTML = originalText;
+                updateSelection(); // This will handle the disabled state
+            }
+        }
     </script>
 </body>
 </html>
@@ -769,7 +879,7 @@ app.post("/api/test-summary", express.json(), async (req, res) => {
 });
 
 /* Session prompt management endpoints */
-app.post("/api/session/:code/prompt", express.json(), (req, res) => {
+app.post("/api/session/:code/prompt", express.json(), async (req, res) => {
   try {
     const { code } = req.params;
     const { prompt } = req.body;
@@ -779,16 +889,17 @@ app.post("/api/session/:code/prompt", express.json(), (req, res) => {
     }
     
     // Get session ID
-    const session = db.prepare("SELECT id FROM sessions WHERE code=?").get(code);
+    const session = await db.collection("sessions").findOne({ code: code });
     if (!session) {
       return res.status(404).json({ error: "Session not found" });
     }
     
     // Save prompt for this session
-    db.prepare(`
-      INSERT OR REPLACE INTO session_prompts (session_id, prompt, updated_at)
-      VALUES (?, ?, ?)
-    `).run(session.id, prompt.trim(), Date.now());
+    await db.collection("session_prompts").findOneAndUpdate(
+      { session_id: session._id },
+      { $set: { prompt: prompt.trim(), updated_at: Date.now() } },
+      { upsert: true }
+    );
     
     console.log(`💾 Saved custom prompt for session ${code}`);
     res.json({ success: true, message: "Prompt saved successfully" });
@@ -799,20 +910,18 @@ app.post("/api/session/:code/prompt", express.json(), (req, res) => {
   }
 });
 
-app.get("/api/session/:code/prompt", (req, res) => {
+app.get("/api/session/:code/prompt", async (req, res) => {
   try {
     const { code } = req.params;
     
     // Get session ID
-    const session = db.prepare("SELECT id FROM sessions WHERE code=?").get(code);
+    const session = await db.collection("sessions").findOne({ code: code });
     if (!session) {
       return res.status(404).json({ error: "Session not found" });
     }
     
     // Get prompt for this session
-    const promptData = db.prepare(`
-      SELECT prompt, updated_at FROM session_prompts WHERE session_id=?
-    `).get(session.id);
+    const promptData = await db.collection("session_prompts").findOne({ session_id: session._id });
     
     if (promptData) {
       res.json({ 
@@ -833,29 +942,27 @@ app.get("/api/session/:code/prompt", (req, res) => {
 });
 
 /* Admin API: create new session */
-app.get("/api/new-session", (req, res) => {
+app.get("/api/new-session", async (req, res) => {
   try {
-  const id   = uuid();
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const interval = Number(req.query.interval) || 30000; // Changed default to 30 seconds
+    const id = uuid();
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const interval = Number(req.query.interval) || 30000;
     
     // Clear any existing session with same code (unlikely but safe)
-    stopAutoSummary(code);
     activeSessions.delete(code);
     
-    db.prepare("INSERT INTO sessions (id, code, interval_ms, created_at, active) VALUES (?,?,?,?,0)")
-      .run(id, code, interval, Date.now());
-    
-    // Store session in memory
+    // Store session in memory only - no database persistence until recording starts
     activeSessions.set(code, {
       id,
       code,
       active: false,
       interval,
-      startTime: null
+      startTime: null,
+      created_at: Date.now(),
+      persisted: false // Flag to track if saved to database
     });
     
-    console.log(`🆕 New session created: Code=${code}, Interval=${interval}ms`);
+    console.log(`🆕 New session created in memory: Code=${code}, Interval=${interval}ms (memory only)`);
     res.json({ code, interval });
   } catch (err) {
     console.error("❌ Failed to create session:", err);
@@ -864,37 +971,17 @@ app.get("/api/new-session", (req, res) => {
 });
 
 /* Get session status */
-app.get("/api/session/:code/status", (req, res) => {
+app.get("/api/session/:code/status", async (req, res) => {
   try {
     const code = req.params.code;
     const sessionState = activeSessions.get(code);
     
     if (!sessionState) {
-      // Check database for session
-      const dbSession = db.prepare("SELECT * FROM sessions WHERE code=?").get(code);
-      if (dbSession) {
-        // Restore session to memory
-        activeSessions.set(code, {
-          id: dbSession.id,
-          code: dbSession.code,
-          active: !!dbSession.active,
-          interval: dbSession.interval_ms || 30000, // Changed default to 30 seconds
-          startTime: dbSession.active ? Date.now() : null
-        });
-        
-        // If session was active, restart auto-summary
-        if (dbSession.active) {
-          startAutoSummary(code, dbSession.interval_ms || 30000); // Changed default to 30 seconds
-          console.log(`🔄 Restored active session: ${code}`);
-        }
-        
-        res.json(activeSessions.get(code));
-      } else {
-        res.status(404).json({ error: "Session not found" });
-      }
-    } else {
-      res.json(sessionState);
+      return res.status(404).json({ error: "Session not found" });
     }
+    
+    console.log(`📋 Session ${code} found in memory`);
+    res.json(sessionState);
   } catch (err) {
     console.error("❌ Failed to get session status:", err);
     res.status(500).json({ error: "Failed to get session status" });
@@ -902,25 +989,81 @@ app.get("/api/session/:code/status", (req, res) => {
 });
 
 /* Admin API: start/stop session */
-app.post("/api/session/:code/start", express.json(), (req, res) => {
+app.post("/api/session/:code/start", express.json(), async (req, res) => {
   try {
     const { interval } = req.body;
     const code = req.params.code;
+    const startTime = Date.now();
     
-    db.prepare("UPDATE sessions SET active=1, interval_ms=? WHERE code=?").run(interval || 30000, code); // Changed default to 30 seconds
-    
-    // Update memory state
+    // Get session from memory
     const sessionState = activeSessions.get(code);
-    if (sessionState) {
-      sessionState.active = true;
-      sessionState.interval = interval || 30000; // Changed default to 30 seconds
-      sessionState.startTime = Date.now();
+    if (!sessionState) {
+      return res.status(404).json({ error: "Session not found in memory" });
     }
     
-    io.to(code).emit("record_now", interval || 30000); // Changed default to 30 seconds
+    // Persist to database when recording actually starts (first time only)
+    if (!sessionState.persisted) {
+      // Check if session already exists in database (in case of server restart)
+      const existingSession = await db.collection("sessions").findOne({ code: code });
+      
+      if (existingSession) {
+        // Session exists in database, just update it
+        await db.collection("sessions").updateOne(
+          { code: code },
+          { $set: { 
+            active: true, 
+            interval_ms: interval || 30000,
+            start_time: startTime,
+            end_time: null,
+            total_duration_seconds: null
+          } }
+        );
+        
+        // Update the session state with the existing database ID
+        sessionState.id = existingSession._id;
+        sessionState.persisted = true;
+        console.log(`🔄 Session ${code} already exists in database, updated with ID: ${existingSession._id}`);
+      } else {
+        // Generate a new unique ID for database insertion
+        const dbSessionId = uuid();
+        
+        await db.collection("sessions").insertOne({
+          _id: dbSessionId,
+          code: code,
+          interval_ms: interval || 30000,
+          created_at: sessionState.created_at,
+          active: true,
+          start_time: startTime,
+          end_time: null,
+          total_duration_seconds: null
+        });
+        
+        // Update the session state with the database ID
+        sessionState.id = dbSessionId;
+        sessionState.persisted = true;
+        console.log(`💾 Session ${code} persisted to database on first start with ID: ${dbSessionId}`);
+      }
+    } else {
+      // Update existing database record
+      await db.collection("sessions").updateOne(
+        { code: code },
+        { $set: { 
+          active: true, 
+          interval_ms: interval || 30000,
+          start_time: startTime,
+          end_time: null,
+          total_duration_seconds: null
+        } }
+      );
+      console.log(`🔄 Session ${code} updated in database`);
+    }
     
-    // Start automatic summary generation - use same interval as recording
-    startAutoSummary(code, interval || 30000); // Changed default to 30 seconds
+    // Update memory state
+    sessionState.active = true;
+    sessionState.interval = interval || 30000;
+    sessionState.startTime = startTime;
+    
+    io.to(code).emit("record_now", interval || 30000);
     
     console.log(`▶️  Session ${code} started recording (interval: ${interval || 30000}ms)`);
     res.json({ ok: true });
@@ -930,23 +1073,42 @@ app.post("/api/session/:code/start", express.json(), (req, res) => {
   }
 });
 
-app.post("/api/session/:code/stop", (req, res) => {
+app.post("/api/session/:code/stop", async (req, res) => {
   try {
     const code = req.params.code;
+    const endTime = Date.now();
     
-    db.prepare("UPDATE sessions SET active=0 WHERE code=?").run(code);
-    
-    // Update memory state
+    // Get session from memory
     const sessionState = activeSessions.get(code);
-    if (sessionState) {
-      sessionState.active = false;
-      sessionState.startTime = null;
+    if (!sessionState) {
+      return res.status(404).json({ error: "Session not found in memory" });
     }
     
-    io.to(code).emit("stop_recording");
+    // Only update database if session was persisted (i.e., recording was started)
+    if (sessionState.persisted) {
+      // Calculate total duration in seconds
+      const totalDurationSeconds = sessionState.startTime ? 
+        Math.floor((endTime - sessionState.startTime) / 1000) : 0;
+      
+      await db.collection("sessions").updateOne(
+        { code: code },
+        { $set: { 
+          active: false,
+          end_time: endTime,
+          total_duration_seconds: totalDurationSeconds
+        } }
+      );
+      
+      console.log(`💾 Session ${code} stopped and saved to database (duration: ${totalDurationSeconds}s)`);
+    } else {
+      console.log(`⏹️  Session ${code} stopped (was never persisted to database)`);
+    }
     
-    // Stop automatic summary generation
-    stopAutoSummary(code);
+    // Update memory state
+    sessionState.active = false;
+    sessionState.startTime = null;
+    
+    io.to(code).emit("stop_recording");
     
     console.log(`⏹️  Session ${code} stopped recording`);
     res.json({ ok: true });
@@ -956,64 +1118,54 @@ app.post("/api/session/:code/stop", (req, res) => {
   }
 });
 
-/* Admin API: get group transcripts and summary */
-app.get("/api/session/:code/group/:number/transcripts", (req, res) => {
+/* Admin API: get transcripts for a specific group */
+app.get("/api/transcripts/:code/:number", async (req, res) => {
   try {
     const { code, number } = req.params;
-    console.log(`📊 Fetching transcripts for session ${code}, group ${number}`);
+    console.log(`📝 Fetching transcripts for session ${code}, group ${number}`);
     
     // Get session and group IDs
-    const session = db.prepare("SELECT id FROM sessions WHERE code=?").get(code);
+    const session = await db.collection("sessions").findOne({ code: code });
     if (!session) {
       return res.status(404).json({ error: "Session not found" });
     }
     
-    const group = db.prepare("SELECT id FROM groups WHERE session_id=? AND number=?")
-      .get(session.id, number);
+    const group = await db.collection("groups").findOne({ session_id: session._id, number: parseInt(number) });
     if (!group) {
       return res.status(404).json({ error: "Group not found" });
     }
     
     // Get all transcripts for this group
-    const transcripts = db.prepare(`
-      SELECT 
-        text,
-        word_count,
-        duration_seconds,
-        segment_number,
-        created_at
-      FROM transcripts 
-      WHERE group_id = ? 
-      ORDER BY created_at DESC
-      LIMIT 50
-    `).all(group.id);
+    const transcripts = await db.collection("transcripts").find({ group_id: group._id }).sort({ created_at: -1 }).limit(50).toArray();
     
     // Get the latest summary
-    const summary = db.prepare(`
-      SELECT text, updated_at
-      FROM summaries
-      WHERE group_id = ?
-    `).get(group.id);
+    const summary = await db.collection("summaries").findOne({ group_id: group._id });
     
     // Get some stats
-    const stats = db.prepare(`
-      SELECT 
-        COUNT(*) as total_segments,
-        SUM(word_count) as total_words,
-        SUM(duration_seconds) as total_duration,
-        MAX(created_at) as last_update
-      FROM transcripts
-      WHERE group_id = ?
-    `).get(group.id);
+    const stats = await db.collection("transcripts").aggregate([
+      { $match: { group_id: group._id } },
+      {
+        $group: {
+          _id: null,
+          total_segments: { $sum: 1 },
+          total_words: { $sum: "$word_count" },
+          total_duration: { $sum: "$duration_seconds" },
+          last_update: { $max: "$created_at" }
+        }
+      }
+    ]).toArray();
     
     res.json({
-      transcripts,
+      transcripts: await Promise.all(transcripts.map(async t => ({
+        ...t,
+        created_at: new Date(t.created_at).toISOString()
+      }))),
       summary: summary || { text: "No summary available", updated_at: null },
-      stats: {
-        totalSegments: stats.total_segments,
-        totalWords: stats.total_words,
-        totalDuration: stats.total_duration,
-        lastUpdate: stats.last_update
+      stats: stats[0] || {
+        totalSegments: 0,
+        totalWords: 0,
+        totalDuration: 0,
+        lastUpdate: null
       }
     });
     
@@ -1024,7 +1176,7 @@ app.get("/api/session/:code/group/:number/transcripts", (req, res) => {
 });
 
 /* Admin API: get historical data */
-app.get("/api/history", (req, res) => {
+app.get("/api/history", async (req, res) => {
   try {
     const { 
       sessionCode, 
@@ -1057,32 +1209,23 @@ app.get("/api/history", (req, res) => {
     }
     
     // Get sessions with basic info
-    const sessions = db.prepare(`
-      SELECT 
-        s.id,
-        s.code,
-        s.interval_ms,
-        s.created_at,
-        s.active,
-        COUNT(DISTINCT g.id) as group_count,
-        COUNT(DISTINCT t.id) as total_transcripts,
-        SUM(t.word_count) as total_words,
-        SUM(t.duration_seconds) as total_duration
-      FROM sessions s
-      LEFT JOIN groups g ON s.id = g.session_id
-      LEFT JOIN transcripts t ON g.id = t.group_id
-      WHERE 1=1 ${sessionFilter}
-      GROUP BY s.id, s.code, s.interval_ms, s.created_at, s.active
-      ORDER BY s.created_at DESC
-      LIMIT ? OFFSET ?
-    `).all(...params, parseInt(limit), parseInt(offset));
+    const sessions = await db.collection("sessions").find({}).sort({ created_at: -1 }).skip(parseInt(offset)).limit(parseInt(limit)).toArray();
     
     const result = {
-      sessions: sessions.map(session => ({
-        ...session,
-        created_at: new Date(session.created_at).toISOString(),
-        interval_seconds: session.interval_ms / 1000,
-        groups: []
+      sessions: await Promise.all(sessions.map(async s => {
+        // Calculate current duration for active sessions
+        let currentDuration = s.total_duration_seconds || 0;
+        if (s.active && s.start_time) {
+          currentDuration = Math.floor((Date.now() - s.start_time) / 1000);
+        }
+        
+        return {
+          ...s,
+          created_at: new Date(s.created_at).toISOString(),
+          interval_seconds: s.interval_ms / 1000,
+          current_duration_seconds: currentDuration,
+          groups: []
+        };
       })),
       pagination: {
         limit: parseInt(limit),
@@ -1095,9 +1238,7 @@ app.get("/api/history", (req, res) => {
     if (includeTranscripts === 'true' || includeSummaries === 'true') {
       for (const session of result.sessions) {
         // Get groups for this session
-        const groups = db.prepare(`
-          SELECT id, number FROM groups WHERE session_id = ? ORDER BY number
-        `).all(session.id);
+        const groups = await db.collection("groups").find({ session_id: session._id }).sort({ number: 1 }).toArray();
         
         for (const group of groups) {
           const groupData = {
@@ -1113,20 +1254,7 @@ app.get("/api/history", (req, res) => {
           
           if (includeTranscripts === 'true') {
             // Get transcripts for this group
-            groupData.transcripts = db.prepare(`
-              SELECT 
-                text,
-                word_count,
-                duration_seconds,
-                segment_number,
-                created_at
-              FROM transcripts 
-              WHERE group_id = ? 
-              ORDER BY created_at ASC
-            `).all(group.id).map(t => ({
-              ...t,
-              created_at: new Date(t.created_at).toISOString()
-            }));
+            groupData.transcripts = await db.collection("transcripts").find({ group_id: group._id }).sort({ created_at: 1 }).toArray();
             
             // Calculate stats
             groupData.stats = {
@@ -1138,9 +1266,7 @@ app.get("/api/history", (req, res) => {
           
           if (includeSummaries === 'true') {
             // Get summary for this group
-            const summary = db.prepare(`
-              SELECT text, updated_at FROM summaries WHERE group_id = ?
-            `).get(group.id);
+            const summary = await db.collection("summaries").findOne({ group_id: group._id });
             
             if (summary) {
               groupData.summary = {
@@ -1155,6 +1281,15 @@ app.get("/api/history", (req, res) => {
       }
     }
     
+    // After all groups are pushed to session.groups in /api/history:
+    for (const session of result.sessions) {
+      session.group_count = session.groups.length;
+      session.total_transcripts = session.groups.reduce((sum, g) => sum + (g.stats?.totalSegments || 0), 0);
+      session.total_words = session.groups.reduce((sum, g) => sum + (g.stats?.totalWords || 0), 0);
+      // Use actual session duration (current for active sessions, total for completed)
+      session.total_duration = session.current_duration_seconds || 0;
+    }
+    
     res.json(result);
     
   } catch (err) {
@@ -1164,24 +1299,20 @@ app.get("/api/history", (req, res) => {
 });
 
 /* Admin API: get specific session details */
-app.get("/api/history/session/:code", (req, res) => {
+app.get("/api/history/session/:code", async (req, res) => {
   try {
     const { code } = req.params;
     console.log(`📋 Fetching detailed data for session: ${code}`);
     
     // Get session info
-    const session = db.prepare(`
-      SELECT id, code, interval_ms, created_at, active FROM sessions WHERE code = ?
-    `).get(code);
+    const session = await db.collection("sessions").findOne({ code: code });
     
     if (!session) {
       return res.status(404).json({ error: "Session not found" });
     }
     
     // Get all groups for this session
-    const groups = db.prepare(`
-      SELECT id, number FROM groups WHERE session_id = ? ORDER BY number
-    `).all(session.id);
+    const groups = await db.collection("groups").find({ session_id: session._id }).sort({ number: 1 }).toArray();
     
     const result = {
       session: {
@@ -1194,29 +1325,17 @@ app.get("/api/history/session/:code", (req, res) => {
     
     for (const group of groups) {
       // Get all transcripts
-      const transcripts = db.prepare(`
-        SELECT 
-          text,
-          word_count,
-          duration_seconds,
-          segment_number,
-          created_at
-        FROM transcripts 
-        WHERE group_id = ? 
-        ORDER BY created_at ASC
-      `).all(group.id);
+      const transcripts = await db.collection("transcripts").find({ group_id: group._id }).sort({ created_at: 1 }).toArray();
       
       // Get summary
-      const summary = db.prepare(`
-        SELECT text, updated_at FROM summaries WHERE group_id = ?
-      `).get(group.id);
+      const summary = await db.collection("summaries").findOne({ group_id: group._id });
       
       const groupData = {
         number: group.number,
-        transcripts: transcripts.map(t => ({
+        transcripts: await Promise.all(transcripts.map(async t => ({
           ...t,
           created_at: new Date(t.created_at).toISOString()
-        })),
+        }))),
         summary: summary ? {
           text: summary.text,
           updated_at: new Date(summary.updated_at).toISOString()
@@ -1241,6 +1360,97 @@ app.get("/api/history/session/:code", (req, res) => {
   }
 });
 
+/* Admin API: delete multiple sessions */
+app.delete("/api/sessions", express.json(), async (req, res) => {
+  try {
+    const { sessionCodes } = req.body;
+    
+    if (!sessionCodes || !Array.isArray(sessionCodes) || sessionCodes.length === 0) {
+      return res.status(400).json({ error: "sessionCodes array is required" });
+    }
+    
+    console.log(`🗑️ Deleting ${sessionCodes.length} sessions:`, sessionCodes);
+    
+    const deletedCounts = {
+      sessions: 0,
+      groups: 0,
+      transcripts: 0,
+      summaries: 0,
+      session_prompts: 0
+    };
+    
+    // Process each session
+    for (const sessionCode of sessionCodes) {
+      console.log(`🗑️ Processing deletion for session: ${sessionCode}`);
+      
+      // Find the session
+      const session = await db.collection("sessions").findOne({ code: sessionCode });
+      if (!session) {
+        console.log(`⚠️ Session ${sessionCode} not found, skipping`);
+        continue;
+      }
+      
+      // Stop any active timers for this session
+      if (activeSessions.has(sessionCode)) {
+        activeSessions.delete(sessionCode);
+        console.log(`🛑 Removed session ${sessionCode} from active sessions`);
+      }
+      
+      if (activeSummaryTimers.has(sessionCode)) {
+        clearInterval(activeSummaryTimers.get(sessionCode));
+        activeSummaryTimers.delete(sessionCode);
+        console.log(`⏰ Stopped auto-summary timer for session ${sessionCode}`);
+      }
+      
+      // Get all groups for this session
+      const groups = await db.collection("groups").find({ session_id: session._id }).toArray();
+      console.log(`📊 Found ${groups.length} groups for session ${sessionCode}`);
+      
+      // Delete all related data for each group
+      for (const group of groups) {
+        // Delete transcripts
+        const transcriptResult = await db.collection("transcripts").deleteMany({ group_id: group._id });
+        deletedCounts.transcripts += transcriptResult.deletedCount;
+        
+        // Delete summaries
+        const summaryResult = await db.collection("summaries").deleteMany({ group_id: group._id });
+        deletedCounts.summaries += summaryResult.deletedCount;
+        
+        console.log(`🗑️ Deleted ${transcriptResult.deletedCount} transcripts and ${summaryResult.deletedCount} summaries for group ${group.number}`);
+      }
+      
+      // Delete all groups for this session
+      const groupResult = await db.collection("groups").deleteMany({ session_id: session._id });
+      deletedCounts.groups += groupResult.deletedCount;
+      
+      // Delete session prompts
+      const promptResult = await db.collection("session_prompts").deleteMany({ session_id: session._id });
+      deletedCounts.session_prompts += promptResult.deletedCount;
+      
+      // Finally, delete the session itself
+      const sessionResult = await db.collection("sessions").deleteOne({ _id: session._id });
+      deletedCounts.sessions += sessionResult.deletedCount;
+      
+      console.log(`✅ Successfully deleted session ${sessionCode} and all related data`);
+    }
+    
+    console.log(`🎯 Deletion complete:`, deletedCounts);
+    
+    res.json({
+      success: true,
+      message: `Successfully deleted ${deletedCounts.sessions} sessions and all related data`,
+      deletedCounts
+    });
+    
+  } catch (err) {
+    console.error("❌ Failed to delete sessions:", err);
+    res.status(500).json({ 
+      error: "Failed to delete sessions", 
+      details: err.message 
+    });
+  }
+});
+
 /* ---------- Auto-summary management ---------- */
 const activeSummaryTimers = new Map();
 
@@ -1253,7 +1463,7 @@ function startAutoSummary(sessionCode, intervalMs) {
     
     // Check if session is still active (both in memory and database)
     const sessionState = activeSessions.get(sessionCode);
-    const session = db.prepare("SELECT id FROM sessions WHERE code=? AND active=1").get(sessionCode);
+    const session = await db.collection("sessions").findOne({ code: sessionCode, active: true });
     
     if (!session || !sessionState?.active) {
       console.log(`⚠️  Session ${sessionCode} no longer active, stopping auto-summary`);
@@ -1261,7 +1471,7 @@ function startAutoSummary(sessionCode, intervalMs) {
       return;
     }
     
-    const groups = db.prepare("SELECT number FROM groups WHERE session_id=?").all(session.id);
+    const groups = await db.collection("groups").find({ session_id: session._id }).sort({ number: 1 }).toArray();
     console.log(`🔄 Processing summaries for ${groups.length} groups in session ${sessionCode}`);
     
     for (const group of groups) {
@@ -1282,7 +1492,20 @@ function stopAutoSummary(sessionCode) {
   }
 }
 
+// Concurrency guard for transcription
+const processingGroups = new Set();
+
 async function generateSummaryForGroup(sessionCode, groupNumber) {
+  const groupKey = `${sessionCode}-${groupNumber}`;
+  
+  // Prevent overlapping processing for the same group
+  if (processingGroups.has(groupKey)) {
+    console.log(`⏳ Group ${groupNumber} already being processed, skipping`);
+    return;
+  }
+  
+  processingGroups.add(groupKey);
+  
   try {
     console.log(`📋 Processing group ${groupNumber} in session ${sessionCode}`);
     
@@ -1301,132 +1524,193 @@ async function generateSummaryForGroup(sessionCode, groupNumber) {
     
     for (const socket of socketsInRoom) {
       if (socket.localBuf && socket.localBuf.length > 0) {
-        combinedAudio.push(...socket.localBuf);
-        socket.localBuf = []; // Clear the buffer after processing
-        hasAudio = true;
+        // For WebM containers, we should have at most one complete container per socket
+        // For other formats, we might have multiple chunks
+        const audioChunks = socket.localBuf.filter(chunk => chunk.data.length > 20000); // Guardrail: only process substantial chunks
+        
+        if (audioChunks.length > 0) {
+          // For WebM, we need to handle both complete containers and partial chunks
+          const baseMime = extractMime(audioChunks[0].format);
+          if (baseMime === 'audio/webm') {
+            // First, look for a complete WebM container
+            const completeContainer = audioChunks.find(chunk => {
+              const header = chunk.data.slice(0, 4).toString('hex');
+              return header === '1a45dfa3' && !chunk.isPartial;
+            });
+            
+            if (completeContainer) {
+              console.log(`✅ Found complete WebM container (${completeContainer.data.length} bytes) from socket ${socket.id}`);
+              combinedAudio.push(completeContainer);
+              hasAudio = true;
+            } else {
+              // Don't try to combine partial chunks - they create corrupted WebM data
+              // Instead, just skip this processing cycle and wait for a complete container
+              console.log(`⏭️  No complete WebM container found, skipping processing (${audioChunks.length} partial chunks available)`);
+              console.log(`💡 Waiting for complete WebM container with header 1a45dfa3...`);
+            }
+          } else {
+            // For other formats, add all substantial chunks
+            combinedAudio.push(...audioChunks);
+            hasAudio = true;
+          }
+        }
+        
+        socket.localBuf.length = 0; // Clear buffer after processing
       }
     }
     
     if (!hasAudio) {
-      console.log(`ℹ️  No audio data available for group ${groupNumber}, skipping`);
+      console.log(`ℹ️  No substantial audio data available for group ${groupNumber}, skipping`);
       return;
     }
     
-    const audio = Buffer.concat(combinedAudio);
-    console.log(`🔄 Processing ${audio.length} bytes of audio data for group ${groupNumber}`);
-    
-    // Get transcription for ONLY this current audio chunk
-    console.log("🗣️  Starting transcription for current chunk...");
-    const transcription = await transcribe(audio);
-    
-    // Only proceed if we have valid transcription
-    if (transcription.text && transcription.text !== "No transcription available" && transcription.text !== "Transcription failed") {
-      console.log(`📝 Transcription for group ${groupNumber}:`, {
-        text: transcription.text,
-        duration: transcription.words.length > 0 ? 
-          transcription.words[transcription.words.length - 1].end : 0,
-        wordCount: transcription.words.length
-      });
+    // Process each blob individually instead of concatenating
+    for (const audioChunk of combinedAudio) {
+      console.log(`🔄 Processing ${audioChunk.data.length} bytes of audio data for group ${groupNumber}`);
       
-      // Save this individual transcription segment
-      const session = db.prepare("SELECT id FROM sessions WHERE code=?").get(sessionCode);
-      const group = db.prepare("SELECT id FROM groups WHERE session_id=? AND number=?").get(session.id, groupNumber);
-      
-      if (group) {
-        // Save the transcription segment
-        const now = Date.now();
-        const transcriptId = uuid();
-        
-        // Calculate word count and duration with fallbacks
-        const wordCount = transcription.words && transcription.words.length > 0 ? 
-          transcription.words.length : 
-          transcription.text.split(' ').filter(w => w.trim().length > 0).length;
-        
-        const duration = transcription.words && transcription.words.length > 0 ? 
-          transcription.words[transcription.words.length - 1].end : 
-          Math.max(10, Math.min(30, transcription.text.length * 0.05)); // Estimate 0.05 seconds per character
-        
-        db.prepare(`
-          INSERT INTO transcripts (
-            id, group_id, text, word_count, duration_seconds, 
-            created_at, segment_number
-          ) VALUES (?,?,?,?,?,?,?)
-        `).run(
-          transcriptId,
-          group.id,
-          transcription.text,
-          wordCount,
-          duration,
-          now,
-          Math.floor(now / 30000) // Update segment tracking for new interval
-        );
-        
-        // Get all transcripts for this group to create summary of FULL conversation
-        const allTranscripts = db.prepare(`
-          SELECT text, word_count, duration_seconds
-          FROM transcripts 
-          WHERE group_id = ? 
-          ORDER BY created_at ASC
-        `).all(group.id);
-        
-        // Combine all transcripts for summary (but only transcribe current chunk)
-        const fullText = allTranscripts.map(t => t.text).join(' ');
-        
-        // Generate summary of the entire conversation so far
-        console.log("🤖 Generating summary of full conversation...");
-        
-        // Get custom prompt for this session
-        let customPrompt = null;
-        if (session) {
-          const promptData = db.prepare("SELECT prompt FROM session_prompts WHERE session_id=?").get(session.id);
-          customPrompt = promptData?.prompt || null;
-        }
-        
-        const summary = await summarise(fullText, customPrompt);
-        
-        // Save/update the summary
-        db.prepare(`
-          INSERT OR REPLACE INTO summaries (
-            group_id, text, updated_at
-          ) VALUES (?,?,?)
-        `).run(group.id, summary, now);
-        
-        // Send both new transcription and updated summary to clients
-        io.to(roomName).emit("transcription_and_summary", {
-          transcription: {
-            text: transcription.text,
-            words: transcription.words,
-            duration: duration,
-            wordCount: wordCount
-          },
-          summary,
-          isLatestSegment: true
-        });
-        
-        // Send update to admin console
-        io.to(sessionCode).emit("admin_update", {
-          group: groupNumber,
-          latestTranscript: transcription.text,
-          transcriptDuration: duration,
-          transcriptWordCount: wordCount,
-          summary,
-          stats: {
-            totalSegments: allTranscripts.length,
-            totalWords: allTranscripts.reduce((sum, t) => sum + (t.word_count || 0), 0),
-            totalDuration: allTranscripts.reduce((sum, t) => sum + (t.duration_seconds || 0), 0),
-            lastUpdate: now
-          }
-        });
-        
-        console.log(`✅ Results saved and sent for session ${sessionCode}, group ${groupNumber}`);
+      // Validate audio before sending to API
+      if (audioChunk.data.length < 1000) {
+        console.log(`⚠️  Audio too small (${audioChunk.data.length} bytes), skipping`);
+        continue;
       }
-    } else {
-      console.log(`⚠️  No valid transcription for group ${groupNumber}`);
+      
+      // Check if audio has valid headers for common formats
+      const header = audioChunk.data.slice(0, 4).toString('hex');
+      const validHeaders = {
+        '1a45dfa3': 'WebM',
+        '52494646': 'WAV/RIFF',
+        '00000020': 'MP4',
+        '4f676753': 'OGG'
+      };
+      
+      if (validHeaders[header]) {
+        console.log(`✅ Valid ${validHeaders[header]} header detected: ${header}`);
+      } else {
+        console.log(`⚠️  Unknown audio header: ${header}, proceeding anyway`);
+        // Log the first few bytes for debugging
+        const firstBytes = audioChunk.data.slice(0, 8).toString('hex');
+        console.log(`🔍 First 8 bytes: ${firstBytes}`);
+      }
+      
+      // Get transcription for this individual audio chunk
+      console.log("🗣️  Starting transcription for current chunk...");
+      
+      console.log(`🎵 Audio format: ${audioChunk.format}`);
+      
+      const transcription = await transcribe(audioChunk.data, audioChunk.format);
+      
+      // Only proceed if we have valid transcription
+      let cleanedText = transcription.text;
+      if (transcription.text && transcription.text !== "No transcription available" && transcription.text !== "Transcription failed") {
+        // Transcript cleaning removed - using raw transcription
+        console.log(`📝 Transcription for group ${groupNumber}:`, {
+          text: cleanedText,
+          duration: transcription.words.length > 0 ? 
+            transcription.words[transcription.words.length - 1].end : 0,
+          wordCount: transcription.words.length
+        });
+        
+        // Save this individual transcription segment
+        const session = await db.collection("sessions").findOne({ code: sessionCode });
+        const group = await db.collection("groups").findOne({ session_id: session._id, number: parseInt(groupNumber) });
+        
+        if (group) {
+          // Save the transcription segment
+          const now = Date.now();
+          const transcriptId = uuid();
+          
+          // Calculate word count and duration with fallbacks
+          const wordCount = transcription.words && transcription.words.length > 0 ? 
+            transcription.words.length : 
+            transcription.text.split(' ').filter(w => w.trim().length > 0).length;
+          
+          const duration = transcription.words && transcription.words.length > 0 ? 
+            transcription.words[transcription.words.length - 1].end : 
+            Math.max(10, Math.min(30, transcription.text.length * 0.05)); // Estimate 0.05 seconds per character
+          
+          await db.collection("transcripts").insertOne({
+            _id: transcriptId,
+            group_id: group._id,
+            text: cleanedText,
+            word_count: wordCount,
+            duration_seconds: duration,
+            created_at: now,
+            segment_number: Math.floor(now / 30000) // Update segment tracking for new interval
+          });
+          
+          // Get all transcripts for this group to create summary of FULL conversation
+          const allTranscripts = await db.collection("transcripts").find({ group_id: group._id }).sort({ created_at: 1 }).toArray();
+          
+          // Combine all transcripts for summary (but only transcribe current chunk)
+          const fullText = allTranscripts.map(t => t.text).join(' ');
+          
+          // Generate summary of the entire conversation so far
+          console.log("🤖 Generating summary of full conversation...");
+          
+          // Get custom prompt for this session
+          let customPrompt = null;
+          if (session) {
+            const promptData = await db.collection("session_prompts").findOne({ session_id: session._id });
+            customPrompt = promptData?.prompt || null;
+          }
+          
+          const summary = await summarise(fullText, customPrompt);
+          
+          // Save/update the summary
+          await db.collection("summaries").findOneAndUpdate(
+            { group_id: group._id },
+            { $set: { text: summary, updated_at: now } },
+            { upsert: true }
+          );
+          
+          // Send both new transcription and updated summary to clients
+          io.to(roomName).emit("transcription_and_summary", {
+            transcription: {
+              text: cleanedText,
+              words: transcription.words,
+              duration: duration,
+              wordCount: wordCount
+            },
+            summary,
+            isLatestSegment: true
+          });
+          
+          // Send update to admin console
+          io.to(sessionCode).emit("admin_update", {
+            group: groupNumber,
+            latestTranscript: cleanedText,
+            cumulativeTranscript: fullText, // Add full conversation for admin
+            transcriptDuration: duration,
+            transcriptWordCount: wordCount,
+            summary,
+            stats: {
+              totalSegments: allTranscripts.length,
+              totalWords: allTranscripts.reduce((sum, t) => sum + (t.word_count || 0), 0),
+              totalDuration: allTranscripts.reduce((sum, t) => sum + (t.duration_seconds || 0), 0),
+              lastUpdate: now
+            }
+          });
+          
+          console.log(`✅ Results saved and sent for session ${sessionCode}, group ${groupNumber}`);
+        }
+      } else {
+        console.log(`⚠️  No valid transcription for group ${groupNumber}`);
+      }
     }
     
   } catch (err) {
     console.error(`❌ Error processing group ${groupNumber}:`, err);
+  } finally {
+    processingGroups.delete(groupKey);
   }
+}
+
+// Helper to clean up transcript using Anthropic
+async function cleanTranscriptWithAnthropic(text) {
+  return summarise(
+    text,
+    "Clean up the following transcript for grammar, punctuation, and readability, but do not summarize or remove any content. Only return the cleaned transcript:"
+  );
 }
 
 /* ---------- 3. WebSocket flow ---------- */
@@ -1448,52 +1732,47 @@ io.on("connection", socket => {
     }
   });
 
-  socket.on("join", ({ code, group }) => {
+  socket.on("join", async ({ code, group }) => {
     try {
       console.log(`👋 Socket ${socket.id} attempting to join session ${code}, group ${group}`);
       
-      // Check memory first, then database
-      let sessionState = activeSessions.get(code);
-      let sess = db.prepare("SELECT id, active, interval_ms FROM sessions WHERE code=?").get(code);
+      // Check memory only - no database lookup
+      const sessionState = activeSessions.get(code);
       
-      if (!sess) {
+      if (!sessionState) {
         console.log(`❌ Session ${code} not found`);
         return socket.emit("error", "Session not found");
       }
       
-      // Restore session to memory if missing
-      if (!sessionState) {
-        sessionState = {
-          id: sess.id,
-          code: code,
-          active: !!sess.active,
-          interval: sess.interval_ms || 30000, // Changed default to 30 seconds
-          startTime: sess.active ? Date.now() : null
-        };
-        activeSessions.set(code, sessionState);
-        console.log(`🔄 Restored session ${code} to memory`);
-        
-        // Restart auto-summary if session was active
-        if (sess.active) {
-          startAutoSummary(code, sess.interval_ms || 30000); // Changed default to 30 seconds
-        }
-      }
-      
-      // Allow joining inactive sessions - students can wait for admin to start
-      // if (!sessionState.active) {
-      //   console.log(`❌ Session ${code} is not active`);
-      //   return socket.emit("error", "Session not active");
-      // }
-      
       sessionCode = code;
       groupNumber = group;
-      const existing = db.prepare("SELECT id FROM groups WHERE session_id=? AND number=?").get(sess.id, group);
-    groupId = existing?.id ?? uuid();
-    if (!existing) {
-        db.prepare("INSERT INTO groups (id, session_id, number) VALUES (?,?,?)").run(groupId, sess.id, group);
-        console.log(`📝 Created new group: Session ${code}, Group ${group}, ID: ${groupId}`);
+      
+      // Only create database entries if session has been persisted (i.e., recording started)
+      if (sessionState.persisted) {
+        // Session exists in database, handle group creation normally
+        const sess = await db.collection("sessions").findOne({ code: code });
+        if (!sess) {
+          console.log(`❌ Session ${code} not found in database despite being marked as persisted`);
+          return socket.emit("error", "Session data inconsistent");
+        }
+        
+        const existing = await db.collection("groups").findOne({ session_id: sess._id, number: parseInt(group) });
+        groupId = existing?._id ?? uuid();
+        
+        if (!existing) {
+          await db.collection("groups").insertOne({
+            _id: groupId,
+            session_id: sess._id,
+            number: parseInt(group)
+          });
+          console.log(`📝 Created new group: Session ${code}, Group ${group}, ID: ${groupId}`);
+        } else {
+          console.log(`🔄 Rejoined existing group: Session ${code}, Group ${group}, ID: ${groupId}`);
+        }
       } else {
-        console.log(`🔄 Rejoined existing group: Session ${code}, Group ${group}, ID: ${groupId}`);
+        // Session not yet persisted, just create a temporary group ID
+        groupId = uuid();
+        console.log(`📝 Created temporary group ID for unpersisted session: ${groupId}`);
       }
       
       socket.join(code);
@@ -1518,14 +1797,54 @@ io.on("connection", socket => {
     }
   });
 
-  socket.on("student:chunk", ({ data }) => {
-    localBuf.push(Buffer.from(data));
-    socket.localBuf = localBuf; // Keep reference updated
-    console.log(`🎤 Received audio chunk from session ${sessionCode}, group ${groupNumber} (${localBuf.length} chunks total, latest: ${data.byteLength} bytes)`);
+  socket.on("student:chunk", ({ data, format }) => {
+    // Note: This event is no longer used. Students now upload chunks directly via /api/transcribe-chunk
+    console.log(`⚠️  Received old-style chunk from ${sessionCode}, group ${groupNumber} - ignoring (use /api/transcribe-chunk instead)`);
+  });
+
+  // Handle heartbeat to keep connection alive (especially for background recording)
+  socket.on("heartbeat", ({ session, group }) => {
+    console.log(`💓 Heartbeat from session ${session}, group ${group} (socket: ${socket.id})`);
+    socket.emit("heartbeat_ack");
+  });
+
+  // Handle admin heartbeat
+  socket.on("admin_heartbeat", ({ sessionCode }) => {
+    console.log(`💓 Admin heartbeat from session ${sessionCode} (socket: ${socket.id})`);
+    socket.emit("admin_heartbeat_ack");
+  });
+
+  // Handle upload errors from students
+  socket.on("upload_error", ({ session, group, error, chunkSize, timestamp }) => {
+    console.log(`❌ Upload error from session ${session}, group ${group}: ${error}`);
+    
+    // Notify admin about the upload error
+    socket.to(session).emit("upload_error", {
+      group: group,
+      error: error,
+      chunkSize: chunkSize,
+      timestamp: timestamp,
+      socketId: socket.id
+    });
+    
+    // Log error for debugging
+    console.log(`📊 Upload error details: ${chunkSize} bytes, ${error}`);
   });
 
   socket.on("disconnect", () => {
     console.log(`🔌 Socket ${socket.id} disconnected from session ${sessionCode}, group ${groupNumber}`);
+    
+    // Clean up socket buffer to prevent memory leaks
+    if (socket.localBuf) {
+      socket.localBuf.length = 0;
+      socket.localBuf = null;
+    }
+    
+    // Remove from processing groups if it was being processed
+    if (sessionCode && groupNumber) {
+      const groupKey = `${sessionCode}-${groupNumber}`;
+      processingGroups.delete(groupKey);
+    }
     
     // Notify admin about student leaving
     if (sessionCode && groupNumber) {
@@ -1535,21 +1854,92 @@ io.on("connection", socket => {
 });
 
 /* ---------- 4. External API helpers ---------- */
-async function transcribe(buf) {
+// Helper to extract base MIME type (before semicolon)
+function extractMime(mime) {
+  if (!mime) return 'audio/webm';
+  return mime.split(';')[0].trim().toLowerCase();
+}
+
+async function transcribe(buf, format = 'audio/webm') {
   try {
-    console.log(`🌐 Calling ElevenLabs API for transcription (${buf.length} bytes)`);
+    console.log(`🌐 Calling ElevenLabs API for transcription (${buf.length} bytes, format: ${format})`);
+    
+    // Additional validation
+    if (!buf || buf.length === 0) {
+      console.log("⚠️  Empty audio buffer provided");
+      return { text: "No audio data available", words: [] };
+    }
+    
+    if (buf.length < 1000) {
+      console.log(`⚠️  Audio buffer too small (${buf.length} bytes) for transcription`);
+      return { text: "Audio too short for transcription", words: [] };
+    }
     
     // Create FormData for the API call
     const FormData = (await import('form-data')).default;
     const formData = new FormData();
     
+    // Extract base MIME type and map formats correctly
+    const baseMime = extractMime(format);
+    let audioMime = baseMime;
+    let filename = 'audio.webm';
+    
+    // Map formats using base MIME, not the whole string
+    switch (baseMime) {
+      case 'audio/wav':
+      case 'audio/x-wav':
+      case 'audio/wave':
+      case 'audio/pcm':
+        audioMime = 'audio/wav';
+        filename = 'audio.wav';
+        break;
+        
+      case 'audio/mp4':
+      case 'audio/m4a':
+        audioMime = 'audio/mp4';
+        filename = 'audio.mp4';
+        break;
+        
+      case 'audio/ogg':
+      case 'audio/opus':
+        audioMime = 'audio/ogg';
+        filename = 'audio.ogg';
+        break;
+        
+      default:
+        // Keep WebM as WebM (default case)
+        audioMime = 'audio/webm';
+        filename = 'audio.webm';
+    }
+    
+    // Validate audio headers based on format
+    const header = buf.slice(0, 4).toString('hex');
+    console.log(`🔍 Audio header: ${header} (format: ${audioMime})`);
+    
+    // Additional validation for WebM containers
+    if (audioMime === 'audio/webm') {
+      if (header !== '1a45dfa3') {
+        console.log(`❌ Invalid WebM header: ${header}, expected: 1a45dfa3`);
+        console.log(`🚫 Rejecting WebM data - only complete containers should be processed`);
+        return { text: "Invalid WebM container - only complete containers are supported", words: [] };
+      }
+      
+      // Check for minimum WebM container size
+      if (buf.length < 1000) {
+        console.log(`❌ WebM container too small: ${buf.length} bytes`);
+        return { text: "WebM container too small", words: [] };
+      }
+      
+      console.log(`✅ Valid WebM container detected (${buf.length} bytes)`);
+    }
+    
     // Add the audio buffer as a file
     formData.append('file', buf, {
-      filename: 'audio.webm',
-      contentType: 'audio/webm'
+      filename: filename,
+      contentType: audioMime
     });
     formData.append('model_id', 'scribe_v1');
-    formData.append('timestamps_granularity', 'word'); // Request word-level timestamps
+    formData.append('timestamps_granularity', 'word');
     
     // Make direct API call instead of using SDK
     const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
@@ -1565,6 +1955,21 @@ async function transcribe(buf) {
       const errorText = await response.text();
       console.error(`❌ ElevenLabs API error: ${response.status} ${response.statusText}`);
       console.error('Error response:', errorText);
+      
+      // Handle specific error cases
+      if (response.status === 400) {
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.detail?.message?.includes('corrupted')) {
+            console.log("🔄 Audio appears corrupted - this might be due to WebM container issues");
+            console.log(`📊 Audio details: ${buf.length} bytes, format: ${audioMime}, header: ${buf.slice(0, 4).toString('hex')}`);
+            return { text: "Audio quality issue - WebM container may be incomplete", words: [] };
+          }
+        } catch (e) {
+          // If we can't parse the error, continue with generic error
+        }
+      }
+      
       throw new Error(`API error: ${response.status} ${response.statusText}`);
     }
     
@@ -1580,7 +1985,13 @@ async function transcribe(buf) {
   } catch (err) {
     console.error("❌ Transcription error:", err);
     console.error("Error details:", err.message);
-    return { text: "Transcription failed", words: [] };
+    
+    // Return a more user-friendly error message
+    if (err.message.includes('corrupted') || err.message.includes('invalid_content')) {
+      return { text: "Audio quality issue - please try again", words: [] };
+    }
+    
+    return { text: "Transcription temporarily unavailable", words: [] };
   }
 }
 
@@ -1628,7 +2039,7 @@ async function summarise(text, customPrompt) {
 }
 
 // Clean up on server shutdown
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('🛑 Server shutting down...');
   
   // Stop all auto-summary timers
@@ -1638,10 +2049,389 @@ process.on('SIGINT', () => {
   }
   
   // Mark all sessions as inactive in database
-  db.prepare("UPDATE sessions SET active=0").run();
+  await db.collection("sessions").updateMany({}, { $set: { active: false } });
   console.log('💾 Marked all sessions as inactive');
   
   process.exit(0);
 });
 
-http.listen(8080, () => console.log("🎯 Server running at http://localhost:8080"));
+/* New 30-second chunk transcription endpoint */
+app.post("/api/transcribe-chunk", upload.single('file'), async (req, res) => {
+  try {
+    console.log("📦 Received chunk for transcription");
+    
+    if (!req.file) {
+      return res.status(400).json({ error: "No audio file provided", success: false });
+    }
+    
+    const audioBuffer = req.file.buffer;
+    const mimeType = req.file.mimetype;
+    const { sessionCode, groupNumber } = req.body;
+    
+    if (!sessionCode || !groupNumber) {
+      return res.status(400).json({ error: "Session code and group number are required", success: false });
+    }
+    
+    console.log(`📁 Processing chunk: ${audioBuffer.length} bytes, mimetype: ${mimeType}, session: ${sessionCode}, group: ${groupNumber}`);
+    
+    // Enhanced chunk validation
+    if (audioBuffer.length < 100) {
+      console.log("⚠️ Chunk too small, skipping");
+      return res.json({ 
+        success: false, 
+        message: "Chunk too small (< 100 bytes)",
+        transcription: { text: "", words: [] }
+      });
+    }
+    
+    if (audioBuffer.length > 10 * 1024 * 1024) { // 10MB limit
+      console.log("⚠️ Chunk too large, skipping");
+      return res.status(400).json({ error: "Chunk too large (>10MB)", success: false });
+    }
+    
+    // Validate audio format
+    const header = audioBuffer.slice(0, 4).toString('hex');
+    const validHeaders = {
+      '1a45dfa3': 'WebM',
+      '52494646': 'WAV/RIFF',
+      '00000020': 'MP4',
+      '4f676753': 'OGG'
+    };
+    
+    if (!validHeaders[header]) {
+      console.log(`⚠️ Unknown audio format, header: ${header}`);
+      // Don't reject - ElevenLabs might still be able to process it
+    } else {
+      console.log(`✅ Detected ${validHeaders[header]} format`);
+    }
+    
+    // Validate WebM containers more strictly
+    if (mimeType.includes('webm') && header !== '1a45dfa3') {
+      console.log(`❌ Invalid WebM container, header: ${header}`);
+      return res.status(400).json({ 
+        error: "Invalid WebM container - corrupted audio data", 
+        success: false,
+        details: `Expected WebM header 1a45dfa3, got ${header}`
+      });
+    }
+    
+    // Direct forward to ElevenLabs using form-data with retry logic
+    const FormData = (await import('form-data')).default;
+    const formData = new FormData();
+    
+    formData.append('model_id', 'scribe_v1');
+    formData.append('file', audioBuffer, {
+      filename: req.file.originalname || `chunk_${Date.now()}.webm`,
+      contentType: mimeType
+    });
+    
+    console.log("🌐 Forwarding to ElevenLabs Speech-to-Text API...");
+    
+    const startTime = Date.now();
+    let response;
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    // Retry logic for ElevenLabs API
+    while (retryCount < maxRetries) {
+      try {
+        response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+          method: 'POST',
+          headers: {
+            'xi-api-key': process.env.ELEVENLABS_KEY,
+            ...formData.getHeaders()
+          },
+          body: formData,
+          timeout: 30000 // 30 second timeout
+        });
+        
+        if (response.ok) {
+          break; // Success, exit retry loop
+        } else if (response.status === 429) {
+          // Rate limit - wait and retry
+          console.log(`⏳ Rate limited, retrying in ${Math.pow(2, retryCount)} seconds...`);
+          await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+          retryCount++;
+        } else if (response.status >= 500) {
+          // Server error - retry
+          console.log(`🔄 Server error ${response.status}, retrying...`);
+          retryCount++;
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } else {
+          // Client error - don't retry
+          break;
+        }
+      } catch (fetchError) {
+        console.error(`❌ Network error (attempt ${retryCount + 1}):`, fetchError);
+        retryCount++;
+        if (retryCount < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+        }
+      }
+    }
+    
+    const processingTime = Date.now() - startTime;
+    
+    if (!response || !response.ok) {
+      let errorText = 'Unknown error';
+      try {
+        errorText = await response.text();
+      } catch (e) {
+        // Ignore text parsing errors
+      }
+      
+      console.error(`❌ ElevenLabs API error after ${retryCount} retries: ${response?.status} ${response?.statusText}`);
+      console.error('Error response:', errorText);
+      
+      // Return more specific error messages
+      let errorMessage = "Transcription service temporarily unavailable";
+      if (response?.status === 400) {
+        errorMessage = "Audio format not supported or corrupted";
+      } else if (response?.status === 401) {
+        errorMessage = "Transcription service authentication failed";
+      } else if (response?.status === 429) {
+        errorMessage = "Transcription service rate limit exceeded";
+      } else if (response?.status >= 500) {
+        errorMessage = "Transcription service server error";
+      }
+      
+      return res.status(response?.status || 500).json({ 
+        error: errorMessage,
+        details: errorText,
+        success: false,
+        retryCount: retryCount
+      });
+    }
+    
+    const result = await response.json();
+    console.log(`✅ ElevenLabs transcription successful (${processingTime}ms, ${retryCount} retries)`);
+    
+    // Use the raw transcription without cleaning
+    let transcriptionText = result.text || "";
+    
+    // Skip empty transcriptions
+    if (!transcriptionText.trim()) {
+      console.log("⚠️ Empty transcription result, skipping database save");
+      return res.json({
+        success: true,
+        message: "Empty transcription - no speech detected",
+        transcription: {
+          text: "",
+          words: [],
+          duration: 0,
+          wordCount: 0
+        },
+        processingTime: `${processingTime}ms`,
+        chunkSize: audioBuffer.length
+      });
+    }
+    
+    // Save to database and generate summary
+    try {
+      // Get session and group
+      const session = await db.collection("sessions").findOne({ code: sessionCode });
+      if (!session) {
+        console.log(`⚠️  Session ${sessionCode} not found in database - session may not have started recording yet`);
+        return res.json({
+          success: true,
+          message: "Session not yet persisted - transcription processed but not saved",
+          transcription: {
+            text: transcriptionText,
+            words: result.words || [],
+            duration: result.words && result.words.length > 0 ? 
+              result.words[result.words.length - 1].end : 
+              Math.max(5, Math.min(60, transcriptionText.split(' ').length * 0.5)),
+            wordCount: result.words ? result.words.length : 
+              transcriptionText.split(' ').filter(w => w.trim().length > 0).length
+          },
+          processingTime: `${processingTime}ms`,
+          chunkSize: audioBuffer.length
+        });
+      }
+      
+      // Define the timestamp for this processing
+      const now = Date.now();
+      
+      const group = await db.collection("groups").findOne({ 
+        session_id: session._id, 
+        number: parseInt(groupNumber) 
+      });
+      if (!group) {
+        console.log(`⚠️  Group ${groupNumber} not found in database - creating new group`);
+        
+        // Create the group since it doesn't exist
+        const newGroupId = uuid();
+        await db.collection("groups").insertOne({
+          _id: newGroupId,
+          session_id: session._id,
+          number: parseInt(groupNumber)
+        });
+        
+        console.log(`📝 Created new group: Session ${sessionCode}, Group ${groupNumber}, ID: ${newGroupId}`);
+        
+        // Continue with the newly created group
+        const newGroup = { _id: newGroupId, session_id: session._id, number: parseInt(groupNumber) };
+        
+        // Save transcription and continue processing with the new group
+        await processTranscriptionForGroup(session, newGroup, transcriptionText, result, now, sessionCode, groupNumber);
+      } else {
+        // Process with existing group
+        await processTranscriptionForGroup(session, group, transcriptionText, result, now, sessionCode, groupNumber);
+      }
+      
+      console.log(`✅ Transcription and summary saved for session ${sessionCode}, group ${groupNumber}`);
+      
+    } catch (dbError) {
+      console.error("❌ Database error:", dbError);
+      // Still return success for transcription even if DB fails
+      return res.json({
+        success: true,
+        message: "Transcription successful but database save failed",
+        transcription: {
+          text: transcriptionText,
+          words: result.words || [],
+          duration: result.words && result.words.length > 0 ? 
+            result.words[result.words.length - 1].end : 
+            Math.max(5, Math.min(60, transcriptionText.split(' ').length * 0.5)),
+          wordCount: result.words ? result.words.length : 
+            transcriptionText.split(' ').filter(w => w.trim().length > 0).length
+        },
+        processingTime: `${processingTime}ms`,
+        chunkSize: audioBuffer.length,
+        dbError: dbError.message
+      });
+    }
+    
+    const finalResult = {
+      success: true,
+      transcription: {
+        text: transcriptionText,
+        words: result.words || [],
+        duration: result.words && result.words.length > 0 ? 
+          result.words[result.words.length - 1].end : 
+          Math.max(5, Math.min(60, transcriptionText.split(' ').length * 0.5)),
+        wordCount: result.words ? result.words.length : 
+          transcriptionText.split(' ').filter(w => w.trim().length > 0).length
+      },
+      processingTime: `${processingTime}ms`,
+      chunkSize: audioBuffer.length,
+      retryCount: retryCount
+    };
+    
+    console.log("📝 Chunk transcription result:", {
+      text: transcriptionText.substring(0, 100) + (transcriptionText.length > 100 ? "..." : ""),
+      wordCount: finalResult.transcription.wordCount,
+      duration: finalResult.transcription.duration,
+      retries: retryCount
+    });
+    
+    res.json(finalResult);
+    
+  } catch (err) {
+    console.error("❌ Chunk transcription error:", err);
+    res.status(500).json({ 
+      error: "Internal server error during transcription", 
+      details: err.message,
+      success: false,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
+});
+
+// Helper function to process transcription for a group
+async function processTranscriptionForGroup(session, group, transcriptionText, result, now, sessionCode, groupNumber) {
+  try {
+    // Save the transcription segment
+    const transcriptId = uuid();
+    
+    const wordCount = result.words && result.words.length > 0 ? 
+      result.words.length : 
+      transcriptionText.split(' ').filter(w => w.trim().length > 0).length;
+    
+    const duration = result.words && result.words.length > 0 ? 
+      result.words[result.words.length - 1].end : 
+      Math.max(5, Math.min(60, transcriptionText.split(' ').length * 0.5));
+    
+    await db.collection("transcripts").insertOne({
+      _id: transcriptId,
+      group_id: group._id,
+      text: transcriptionText,
+      word_count: wordCount,
+      duration_seconds: duration,
+      created_at: now,
+      segment_number: Math.floor(now / (session.interval_ms || 30000))
+    });
+    
+    // Get all transcripts for this group to create cumulative conversation
+    const allTranscripts = await db.collection("transcripts").find({ 
+      group_id: group._id 
+    }).sort({ created_at: 1 }).toArray();
+    
+    // Create cumulative conversation text (chronological order)
+    const cumulativeText = allTranscripts.map(t => t.text).join(' ');
+    
+    // Generate summary of the entire conversation so far
+    console.log("🤖 Generating summary of full conversation...");
+    
+    // Get custom prompt for this session
+    let customPrompt = null;
+    const promptData = await db.collection("session_prompts").findOne({ session_id: session._id });
+    customPrompt = promptData?.prompt || null;
+    
+    const summary = await summarise(cumulativeText, customPrompt);
+    
+    // Save/update the summary
+    await db.collection("summaries").findOneAndUpdate(
+      { group_id: group._id },
+      { $set: { text: summary, updated_at: now } },
+      { upsert: true }
+    );
+    
+    // Send both new transcription and updated summary to clients
+    const roomName = `${sessionCode}-${groupNumber}`;
+    io.to(roomName).emit("transcription_and_summary", {
+      transcription: {
+        text: transcriptionText, // Current chunk only
+        cumulativeText: cumulativeText, // Full conversation so far
+        words: result.words,
+        duration: duration,
+        wordCount: wordCount
+      },
+      summary,
+      isLatestSegment: true
+    });
+    
+    // Send update to admin console
+    io.to(sessionCode).emit("admin_update", {
+      group: groupNumber,
+      latestTranscript: transcriptionText,
+      cumulativeTranscript: cumulativeText, // Add full conversation for admin
+      transcriptDuration: duration,
+      transcriptWordCount: wordCount,
+      summary,
+      stats: {
+        totalSegments: allTranscripts.length,
+        totalWords: allTranscripts.reduce((sum, t) => sum + (t.word_count || 0), 0),
+        totalDuration: allTranscripts.reduce((sum, t) => sum + (t.duration_seconds || 0), 0),
+        lastUpdate: now
+      }
+    });
+    
+    // Clean up old transcripts to prevent memory issues (keep last 100 per group)
+    if (allTranscripts.length > 100) {
+      const oldTranscripts = allTranscripts.slice(0, -100);
+      const oldTranscriptIds = oldTranscripts.map(t => t._id);
+      
+      await db.collection("transcripts").deleteMany({
+        _id: { $in: oldTranscriptIds }
+      });
+      
+      console.log(`🧹 Cleaned up ${oldTranscripts.length} old transcripts for group ${groupNumber}`);
+    }
+    
+  } catch (error) {
+    console.error(`❌ Error processing transcription for group ${groupNumber}:`, error);
+    throw error;
+  }
+}
+

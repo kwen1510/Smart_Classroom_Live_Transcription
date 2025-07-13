@@ -6,13 +6,15 @@
     <title>Student View - Smart Classroom</title>
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <script>
         tailwind.config = {
             theme: {
                 extend: {
                     animation: {
                         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-                        'slide-in': 'slideIn 0.3s ease-out'
+                        'slide-in': 'slideIn 0.3s ease-out',
+                        'ping-slow': 'ping 2s cubic-bezier(0, 0, 0.2, 1) infinite'
                     }
                 }
             }
@@ -27,6 +29,7 @@
             to { opacity: 1; transform: translateY(0); }
         }
         .new-transcript { animation: slideIn 0.3s ease-out; }
+        .connection-indicator { transition: all 0.3s ease; }
   </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -34,17 +37,15 @@
     <div id="joinForm" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4">
         <div class="max-w-md w-full">
             <div class="text-center mb-8">
-                <div class="w-20 h-20 mx-auto bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center mb-4">
-                    <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
-                    </svg>
+                <div class="w-20 h-20 mx-auto bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center mb-4 backdrop-blur-sm">
+                    <i data-lucide="graduation-cap" class="w-10 h-10 text-white"></i>
                 </div>
                 <h1 class="text-3xl font-bold text-gray-900 mb-2">Smart Classroom</h1>
                 <p class="text-gray-600">Join your group session to start learning</p>
             </div>
             
             <div class="bg-white rounded-2xl shadow-xl p-8">
-                <div class="space-y-6">
+                <form id="joinSessionForm" class="space-y-6">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Session Code</label>
                         <input type="text" id="sessionCode" placeholder="Enter 6-digit code" maxlength="6" 
@@ -55,10 +56,10 @@
                         <input type="number" id="groupNumber" placeholder="Your group number" min="1" max="99"
                                class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-center text-lg">
                     </div>
-                    <button id="joinBtn" class="w-full bg-gradient-to-r from-indigo-500 to-purple-600 text-white py-3 px-6 rounded-lg font-semibold hover:from-indigo-600 hover:to-purple-700 transition-all duration-200 transform hover:scale-105 shadow-lg">
+                    <button type="submit" class="w-full bg-gradient-to-r from-indigo-500 to-purple-600 text-white py-3 px-6 rounded-lg font-semibold hover:from-indigo-600 hover:to-purple-700 transition-all duration-200 transform hover:scale-105 shadow-lg">
                         Join Session
                     </button>
-                </div>
+                </form>
                 <div id="error" class="hidden mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
                     <div class="flex">
                         <svg class="w-5 h-5 text-red-400 mt-0.5 mr-3" fill="currentColor" viewBox="0 0 20 20">
@@ -78,21 +79,24 @@
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center space-x-4">
-                        <div class="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
-                            <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                            </svg>
+                        <div class="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center backdrop-blur-sm">
+                            <i data-lucide="graduation-cap" class="w-6 h-6 text-white"></i>
                         </div>
                         <div>
-                            <h1 class="text-lg font-semibold">Session: <span id="activeSession" class="font-mono">-</span></h1>
-                            <p class="text-white/80 text-sm">Group: <span id="activeGroup">-</span></p>
+                            <h1 class="text-lg font-semibold flex items-center">
+                                Smart Classroom
+                                <div id="connectionStatus" class="ml-3 flex items-center space-x-2">
+                                    <div id="connectionDot" class="w-2 h-2 bg-green-400 rounded-full animate-ping-slow"></div>
+                                    <span id="connectionText" class="text-xs font-medium text-white/90">Connected</span>
+                                </div>
+                            </h1>
+                            <p class="text-white/80 text-sm">Session: <span id="activeSession" class="font-mono">-</span> | Group: <span id="activeGroup">-</span></p>
                         </div>
                     </div>
                     <div class="flex items-center space-x-4">
-                        <a href="/history" class="bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-lg transition-colors text-sm">📚 History</a>
-                        <div id="status" class="flex items-center space-x-2 bg-white/20 px-4 py-2 rounded-full">
-                            <div class="w-2 h-2 bg-orange-300 rounded-full"></div>
-                            <span class="text-sm font-medium">Waiting...</span>
+                        <div id="status" class="flex items-center space-x-2 bg-blue-100 text-blue-800 px-4 py-2 rounded-full">
+                            <div class="w-2 h-2 bg-blue-400 rounded-full"></div>
+                            <span id="statusText" class="text-sm font-medium">Waiting...</span>
                         </div>
                     </div>
                 </div>
@@ -182,11 +186,385 @@
 
   <script>
     const socket = io();
+        let mediaRecorder;
+        let stream;
         let isRecording = false;
-        let rec, stream;
+        let recordingInterval;
+        let currentSession = null;
+        let currentGroup = null;
+        let chunkInterval = 30000; // Default, will be updated from admin
+        let recordingTimer;
+        let overlapDuration = 1000; // 1 second overlap to prevent audio loss
+        let isPageVisible = true;
+        let backgroundRecordingSupported = false;
+        let heartbeatInterval = null;
+        let connectionCheckInterval = null;
+        let lastHeartbeatTime = Date.now();
+        let isConnected = true;
+        let hasJoinedSession = false;
+        
+        // Initialize Lucide icons
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+        });
+        
+        // Connection status management
+        function updateConnectionStatus(connected) {
+            const dot = document.getElementById('connectionDot');
+            const text = document.getElementById('connectionText');
+            
+            if (connected && !isConnected) {
+                // Reconnected
+                dot.className = 'w-2 h-2 bg-green-400 rounded-full animate-ping-slow';
+                text.textContent = 'Connected';
+                text.className = 'text-xs font-medium text-white/90';
+                isConnected = true;
+                console.log('🟢 Student connected');
+            } else if (!connected && isConnected) {
+                // Disconnected
+                dot.className = 'w-2 h-2 bg-red-400 rounded-full animate-pulse';
+                text.textContent = 'Disconnected';
+                text.className = 'text-xs font-medium text-red-200';
+                isConnected = false;
+                console.log('🔴 Student disconnected');
+            }
+        }
+        
+        // Start heartbeat system
+        function startHeartbeat() {
+            // Send heartbeat every 30 seconds
+            heartbeatInterval = setInterval(() => {
+                if (socket.connected && currentSession && currentGroup) {
+                    socket.emit('heartbeat', { session: currentSession, group: currentGroup });
+                    console.log('💓 Student heartbeat sent');
+                }
+            }, 30000);
+            
+            // Check connection status every 5 seconds
+            connectionCheckInterval = setInterval(() => {
+                const now = Date.now();
+                const timeSinceLastHeartbeat = now - lastHeartbeatTime;
+                
+                // Consider disconnected if no heartbeat response in 45 seconds
+                if (timeSinceLastHeartbeat > 45000) {
+                    updateConnectionStatus(false);
+                } else {
+                    updateConnectionStatus(true);
+                }
+            }, 5000);
+        }
+        
+        // Stop heartbeat system
+        function stopHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+            if (connectionCheckInterval) {
+                clearInterval(connectionCheckInterval);
+                connectionCheckInterval = null;
+            }
+        }
+
+        // Check if background recording is supported
+        function checkBackgroundSupport() {
+            // Check for Page Visibility API support
+            if (typeof document.hidden !== "undefined" || 
+                typeof document.webkitHidden !== "undefined" || 
+                typeof document.mozHidden !== "undefined") {
+                backgroundRecordingSupported = true;
+                console.log("✅ Background recording supported");
+            } else {
+                console.log("⚠️ Background recording may be limited on this browser");
+            }
+        }
+
+        // Handle page visibility changes
+        function handleVisibilityChange() {
+            const isHidden = document.hidden || document.webkitHidden || document.mozHidden;
+            isPageVisible = !isHidden;
+            
+            if (isPageVisible) {
+                console.log("👁️ Page is now visible");
+                updateStatus(isRecording ? "Recording..." : "Connected", isRecording ? "recording" : "connected");
+            } else {
+                console.log("🫥 Page is now hidden - continuing recording in background");
+                if (isRecording) {
+                    updateStatus("Recording in background...", "recording");
+                }
+            }
+        }
+
+        // Add visibility change listeners
+        function setupBackgroundRecording() {
+            checkBackgroundSupport();
+            
+            // Add event listeners for visibility changes
+            if (typeof document.addEventListener !== "undefined") {
+                document.addEventListener("visibilitychange", handleVisibilityChange);
+            } else if (typeof document.webkitHidden !== "undefined") {
+                document.addEventListener("webkitvisibilitychange", handleVisibilityChange);
+            } else if (typeof document.mozHidden !== "undefined") {
+                document.addEventListener("mozvisibilitychange", handleVisibilityChange);
+            }
+            
+            // Prevent the page from being suspended when hidden
+            if ('wakeLock' in navigator) {
+                // Request a wake lock to keep the page active (when supported)
+                navigator.wakeLock.request('screen').then(wakeLock => {
+                    console.log("🔒 Screen wake lock acquired for background recording");
+                }).catch(err => {
+                    console.log("⚠️ Could not acquire wake lock:", err);
+                });
+            }
+            
+            // Use a heartbeat to keep the connection alive
+            setInterval(() => {
+                if (currentSession && socket.connected) {
+                    socket.emit('heartbeat', { session: currentSession, group: currentGroup });
+                }
+            }, 30000); // Send heartbeat every 30 seconds
+        }
+
+        async function startRecording() {
+            try {
+                console.log("🎤 Starting recording...");
+                
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+                
+                isRecording = true;
+                updateStatus(isPageVisible ? "Recording..." : "Recording in background...", "recording");
+                
+                // Start the first recording cycle
+                startRecordingCycle();
+                
+            } catch (err) {
+                console.error("❌ Failed to start recording:", err);
+                updateStatus("Failed to start recording", "error");
+            }
+        }
+
+        async function startRecordingCycle() {
+            if (!isRecording || !stream) return;
+            
+            try {
+                console.log(`🎬 Starting new recording cycle (${chunkInterval}ms with ${overlapDuration}ms overlap)${isPageVisible ? '' : ' [BACKGROUND]'}`);
+                
+                // Use proper WebM/Opus format
+                const options = { mimeType: 'audio/webm;codecs=opus' };
+                if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                    options.mimeType = 'audio/webm';
+                }
+                
+                mediaRecorder = new MediaRecorder(stream, options);
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        console.log(`📦 Received complete chunk: ${event.data.size} bytes${isPageVisible ? '' : ' [BACKGROUND]'}`);
+                        uploadChunk(event.data);
+                    }
+                };
+                
+                mediaRecorder.onerror = (event) => {
+                    console.error("❌ MediaRecorder error:", event.error);
+                    updateStatus("Recording error occurred", "error");
+                };
+                
+                mediaRecorder.onstop = () => {
+                    console.log(`⏹️ Recording cycle stopped${isPageVisible ? '' : ' [BACKGROUND]'}`);
+                    
+                    // If still recording, start the next cycle with overlap
+                    if (isRecording) {
+                        // Start next cycle immediately (overlap ensures no audio loss)
+                        setTimeout(() => {
+                            startRecordingCycle();
+                        }, 50); // Very brief pause
+                    }
+                };
+                
+                // Start recording (no timeslice - record until we stop it)
+                mediaRecorder.start();
+                
+                // Stop recording after the specified interval + overlap
+                recordingTimer = setTimeout(() => {
+                    if (mediaRecorder && mediaRecorder.state === 'recording') {
+                        console.log(`⏰ Stopping recording after ${chunkInterval + overlapDuration}ms${isPageVisible ? '' : ' [BACKGROUND]'}`);
+                        mediaRecorder.stop();
+                    }
+                }, chunkInterval + overlapDuration);
+                
+            } catch (err) {
+                console.error("❌ Failed to start recording cycle:", err);
+                updateStatus("Recording cycle failed", "error");
+            }
+        }
+
+        async function uploadChunk(blob) {
+            const maxRetries = 3;
+            let retryCount = 0;
+            
+            while (retryCount < maxRetries) {
+                try {
+                    const formData = new FormData();
+                    formData.append('file', blob, `chunk_${Date.now()}.webm`);
+                    formData.append('sessionCode', currentSession);
+                    formData.append('groupNumber', currentGroup);
+                    
+                    console.log(`📤 Uploading chunk (attempt ${retryCount + 1}/${maxRetries}): ${blob.size} bytes, type: ${blob.type}, session: ${currentSession}, group: ${currentGroup}`);
+                    
+                    // Show upload progress
+                    updateStatus(`Uploading audio chunk... (${retryCount + 1}/${maxRetries})`, "processing");
+                    
+                    // Add timeout to prevent hanging uploads
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+                    
+                    const response = await fetch('/api/transcribe-chunk', {
+                        method: 'POST',
+                        body: formData,
+                        signal: controller.signal
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        let errorMessage = `Upload failed: ${response.status}`;
+                        
+                        try {
+                            const errorJson = JSON.parse(errorText);
+                            errorMessage = errorJson.error || errorMessage;
+                        } catch (e) {
+                            // Use status text if JSON parsing fails
+                            errorMessage = `Upload failed: ${response.status} ${response.statusText}`;
+                        }
+                        
+                        throw new Error(errorMessage);
+                    }
+                    
+                    const result = await response.json();
+                    console.log("✅ Chunk uploaded successfully:", result);
+                    
+                    // Update status based on result
+                    if (result.success) {
+                        updateStatus("Upload successful - processing...", "connected");
+                        
+                        // Show processing info if available
+                        if (result.processingTime) {
+                            console.log(`⏱️ Processing time: ${result.processingTime}`);
+                        }
+                    } else {
+                        console.warn("⚠️ Upload completed but marked as unsuccessful:", result);
+                        updateStatus("Upload completed with warnings", "waiting");
+                    }
+                    
+                    // Success - exit retry loop
+                    return;
+                    
+                } catch (err) {
+                    console.error(`❌ Upload attempt ${retryCount + 1} failed:`, err);
+                    retryCount++;
+                    
+                    if (retryCount < maxRetries) {
+                        // Wait before retrying (exponential backoff)
+                        const delay = Math.pow(2, retryCount) * 1000; // 2s, 4s, 8s
+                        console.log(`⏳ Retrying in ${delay/1000} seconds...`);
+                        updateStatus(`Upload failed, retrying in ${delay/1000}s...`, "waiting");
+                        
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    } else {
+                        // All retries failed
+                        console.error("❌ All upload attempts failed:", err);
+                        updateStatus(`Upload failed: ${err.message}`, "error");
+                        
+                        // Show user-friendly error message
+                        showUploadError(err.message);
+                        
+                        // Emit error to server for admin notification
+                        if (socket.connected) {
+                            socket.emit('upload_error', {
+                                session: currentSession,
+                                group: currentGroup,
+                                error: err.message,
+                                chunkSize: blob.size,
+                                timestamp: Date.now()
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Show upload error to user
+        function showUploadError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'fixed top-4 right-4 z-50 bg-red-50 border-l-4 border-red-400 p-4 rounded-r-lg shadow-lg max-w-md';
+            errorDiv.innerHTML = `
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                        </svg>
+                    </div>
+                    <div class="ml-3">
+                        <h3 class="text-sm font-medium text-red-800">Upload Error</h3>
+                        <p class="mt-1 text-sm text-red-600">${message}</p>
+                        <p class="mt-1 text-xs text-red-500">The recording will continue. This chunk will be skipped.</p>
+                    </div>
+                    <div class="ml-auto pl-3">
+                        <button onclick="this.parentElement.parentElement.parentElement.remove()" class="text-red-400 hover:text-red-600">
+                            <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(errorDiv);
+            
+            // Auto-remove after 10 seconds
+            setTimeout(() => {
+                if (document.body.contains(errorDiv)) {
+                    document.body.removeChild(errorDiv);
+                }
+            }, 10000);
+        }
+
+        function stopRecording() {
+            if (isRecording) {
+                console.log(`🛑 Stopping recording...${isPageVisible ? '' : ' [BACKGROUND]'}`);
+                isRecording = false;
+                
+                // Clear the recording timer
+                if (recordingTimer) {
+                    clearTimeout(recordingTimer);
+                    recordingTimer = null;
+                }
+                
+                // Stop current recording
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                }
+                
+                // Stop the stream
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    stream = null;
+                }
+                
+                updateStatus("Recording stopped", "idle");
+            }
+        }
 
         // DOM Elements
-        const joinForm = document.getElementById('joinForm');
+        const joinForm = document.getElementById('joinSessionForm');
         const content = document.getElementById('content');
         const error = document.getElementById('error');
         const errorText = document.getElementById('errorText');
@@ -211,199 +589,257 @@
             }, 5000);
         }
 
-        // Update recording status
-        function updateStatus(isRecording, text = null) {
+        // Update recording status with better visual feedback
+        function updateStatus(message, type = "idle") {
             const statusEl = document.getElementById('status');
-            if (isRecording) {
-                statusEl.innerHTML = `
-                    <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                    <span class="text-sm font-medium">Recording</span>
-                `;
-                statusEl.className = 'flex items-center space-x-2 bg-green-500/20 px-4 py-2 rounded-full';
-            } else {
-                statusEl.innerHTML = `
-                    <div class="w-2 h-2 bg-orange-300 rounded-full"></div>
-                    <span class="text-sm font-medium">${text || 'Waiting...'}</span>
-                `;
-                statusEl.className = 'flex items-center space-x-2 bg-white/20 px-4 py-2 rounded-full';
+            const statusTextEl = document.getElementById('statusText');
+            
+            statusTextEl.textContent = message;
+            
+            // Remove all status classes
+            statusEl.classList.remove('bg-green-100', 'text-green-800', 'bg-yellow-100', 'text-yellow-800', 
+                                     'bg-red-100', 'text-red-800', 'bg-blue-100', 'text-blue-800', 
+                                     'bg-gray-100', 'text-gray-800', 'bg-purple-100', 'text-purple-800',
+                                     'bg-orange-100', 'text-orange-800');
+            
+            // Add appropriate class based on type
+            switch(type) {
+                case "recording":
+                    if (!isPageVisible) {
+                        // Special styling for background recording
+                        statusEl.classList.add('bg-purple-100', 'text-purple-800');
+                        // Add a pulsing effect for background recording
+                        statusEl.style.animation = 'pulse 2s infinite';
+                    } else {
+                        statusEl.classList.add('bg-red-100', 'text-red-800');
+                        statusEl.style.animation = '';
+                    }
+                    break;
+                case "processing":
+                    statusEl.classList.add('bg-orange-100', 'text-orange-800');
+                    statusEl.style.animation = 'pulse 1.5s infinite';
+                    break;
+                case "connected":
+                    statusEl.classList.add('bg-green-100', 'text-green-800');
+                    statusEl.style.animation = '';
+                    break;
+                case "waiting":
+                    statusEl.classList.add('bg-yellow-100', 'text-yellow-800');
+                    statusEl.style.animation = '';
+                    break;
+                case "error":
+                    statusEl.classList.add('bg-red-100', 'text-red-800');
+                    statusEl.style.animation = '';
+                    break;
+                case "disconnected":
+                    statusEl.classList.add('bg-gray-100', 'text-gray-800');
+                    statusEl.style.animation = '';
+                    break;
+                default:
+                    statusEl.classList.add('bg-blue-100', 'text-blue-800');
+                    statusEl.style.animation = '';
             }
         }
 
-        // Join session
-        document.getElementById('joinBtn').addEventListener('click', () => {
-            const code = document.getElementById('sessionCode').value.trim();
-            const group = parseInt(document.getElementById('groupNumber').value);
+        function displayTranscription(text, cumulativeText) {
+            const latestTranscript = document.getElementById('latestTranscript');
+            
+            // Clear empty state if present
+            if (latestTranscript.querySelector('.text-center')) {
+                latestTranscript.innerHTML = '';
+            }
+            
+            // Move current latest to history if it exists
+            const currentLatest = latestTranscript.querySelector('.transcript-item');
+            if (currentLatest) {
+                const olderTranscripts = document.getElementById('olderTranscripts');
+                olderTranscripts.insertBefore(currentLatest, olderTranscripts.firstChild);
+                
+                // Keep only last 10 in history
+                while (olderTranscripts.children.length > 10) {
+                    olderTranscripts.removeChild(olderTranscripts.lastChild);
+                }
+            }
+            
+            // Create new latest transcript showing cumulative conversation
+            const transcriptDiv = document.createElement('div');
+            transcriptDiv.className = 'transcript-item new-transcript bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border-l-4 border-blue-400 transition-all duration-300';
+            
+            transcriptDiv.innerHTML = `
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-1 rounded uppercase tracking-wide">Full Conversation</span>
+                    <span class="ml-2 text-xs text-gray-500">${new Date().toLocaleTimeString()}</span>
+                </div>
+                <div class="transcript-content mb-3">
+                    <div class="text-gray-800 leading-relaxed">${cumulativeText || text}</div>
+                </div>
+                <div class="text-xs text-gray-500 border-t pt-2 mt-2">
+                    <span class="font-medium">Latest chunk:</span> "${text}"
+                </div>
+            `;
+            
+            // Add to latest transcript area
+            latestTranscript.appendChild(transcriptDiv);
+            
+            // Remove animation class after animation
+            setTimeout(() => {
+                transcriptDiv.classList.remove('new-transcript');
+            }, 300);
+        }
 
-            if (!code || !group) {
+        function displaySummary(summary) {
+            summaryArea.innerHTML = `
+                <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-6 border-l-4 border-purple-400 h-full">
+                    <div class="prose prose-purple max-w-none">
+                        <div class="text-gray-800 leading-relaxed whitespace-pre-line">${summary}</div>
+                    </div>
+                </div>
+            `;
+            
+            // Show and update timestamp
+            summaryTimestamp.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+            summaryTimestamp.classList.remove('hidden');
+        }
+
+        // Form submission
+        joinForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            const sessionCode = document.getElementById('sessionCode').value.trim();
+            const groupNumber = document.getElementById('groupNumber').value;
+            
+            if (!sessionCode || !groupNumber) {
                 showError('Please enter both session code and group number');
                 return;
             }
-
-            socket.emit('join', { code, group });
-            console.log(`Attempting to join session ${code}, group ${group}`);
+            
+            console.log(`🔗 Joining session ${sessionCode}, group ${groupNumber}`);
+            updateStatus("Connecting...", "waiting");
+            
+            // Join the session
+            socket.emit('join', { 
+                code: sessionCode, 
+                group: parseInt(groupNumber) 
+            });
+            
+            // Update UI - hide join form container and show content
+            document.getElementById('activeSession').textContent = sessionCode;
+            document.getElementById('activeGroup').textContent = groupNumber;
+            document.getElementById('joinForm').classList.add('hidden');
+            document.getElementById('content').classList.remove('hidden');
         });
 
         // Socket event handlers
-        socket.on('joined', ({ code, group, status }) => {
-            console.log(`Joined session ${code}, group ${group} (status: ${status})`);
+        socket.on('joined', (data) => {
+            console.log('✅ Joined session:', data);
+            currentSession = data.code;
+            currentGroup = data.group;
+            hasJoinedSession = true;
             
-            // Update UI
-            document.getElementById('activeSession').textContent = code;
-            document.getElementById('activeGroup').textContent = group;
-            joinForm.classList.add('hidden');
-            content.classList.remove('hidden');
+            updateStatus(`Joined session ${data.code}, group ${data.group}`, "connected");
             
-            if (status === 'recording') {
-                updateStatus(true);
+            if (data.status === "recording") {
+                // Session is already recording, start immediately
+                startRecording();
             } else {
-                updateStatus(false, 'Waiting for teacher to start');
+                updateStatus("Waiting for session to start...", "waiting");
             }
         });
 
-        socket.on('error', (msg) => {
-            showError(msg);
-        });
-
-        socket.on('record_now', async (interval) => {
-            console.log(`Starting recording with ${interval}ms interval`);
-            try {
-                // Stop any existing recording first
-                if (rec && rec.state !== "inactive") {
-                    rec.stop();
-                }
-                if (stream) {
-                    stream.getTracks().forEach(t => t.stop());
-                }
-                
-                // Request microphone access
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                console.log("🎵 Microphone access granted");
-                
-                // Setup MediaRecorder
-        rec = new MediaRecorder(stream, { mimeType: "audio/webm" });
-        rec.ondataavailable = async e => {
-                    if (isRecording && socket.connected) {
-          const buf = await e.data.arrayBuffer();
-                        console.log(`📡 Sending audio chunk: ${buf.byteLength} bytes`);
-          socket.emit("student:chunk", { data: buf });
-                    }
-                };
-                
-                // Start recording with interval
-                rec.start(interval / 4);
-                isRecording = true;
-                updateStatus(true);
-                console.log("✅ Recording started successfully");
-      } catch (err) {
-                console.error("❌ Microphone error:", err);
-                showError("Microphone access denied. Please allow microphone access and try again.");
-                isRecording = false;
-                updateStatus(false, 'Microphone access denied');
-            }
+        socket.on('record_now', (interval) => {
+            console.log(`🎬 Session started recording${isPageVisible ? '' : ' [BACKGROUND]'}`);
+            recordingInterval = interval;
+            chunkInterval = interval; // Update chunk interval to match admin setting
+            startRecording();
         });
 
         socket.on('stop_recording', () => {
-            console.log('Stopping recording');
-            if (rec && rec.state !== "inactive") {
-                rec.stop();
-                console.log("🛑 MediaRecorder stopped");
-            }
-            if (stream) {
-                stream.getTracks().forEach(t => t.stop());
-                console.log("🔇 Audio tracks stopped");
-            }
-            isRecording = false;
-            updateStatus(false, 'Recording stopped');
+            console.log(`🛑 Session stopped recording${isPageVisible ? '' : ' [BACKGROUND]'}`);
+            stopRecording();
         });
 
         socket.on('transcription_and_summary', (data) => {
-            console.log('Received transcription and summary update:', data);
+            console.log(`📝 Received transcription and summary${isPageVisible ? '' : ' [BACKGROUND]'}:`, data);
             
-            if (data.transcription) {
-                // Clear empty state if present
-                const latestTranscript = document.getElementById('latestTranscript');
-                if (latestTranscript.querySelector('.text-center')) {
-                    latestTranscript.innerHTML = '';
-                }
-                
-                // Move current latest to history if it exists
-                const currentLatest = latestTranscript.querySelector('.transcript-item');
-                if (currentLatest) {
-                    const olderTranscripts = document.getElementById('olderTranscripts');
-                    olderTranscripts.insertBefore(currentLatest, olderTranscripts.firstChild);
-                    
-                    // Keep only last 10 in history
-                    while (olderTranscripts.children.length > 10) {
-                        olderTranscripts.removeChild(olderTranscripts.lastChild);
-                    }
-                }
-                
-                // Create new latest transcript
-                const transcriptDiv = document.createElement('div');
-                transcriptDiv.className = 'transcript-item new-transcript bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border-l-4 border-blue-400 transition-all duration-300';
-                
-                // Add "Latest" badge and content
-                transcriptDiv.innerHTML = `
-                    <div class="flex items-center mb-3">
-                        <span class="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-1 rounded uppercase tracking-wide">Latest</span>
-                        <span class="ml-2 text-xs text-gray-500">${formatTime(data.transcription.duration || 0)}</span>
-                    </div>
-                    <div class="transcript-content mb-3">
-                        ${data.transcription.words && data.transcription.words.length > 0 ? 
-                            data.transcription.words.map(word => 
-                                `<span class="inline-block hover:bg-blue-200 cursor-pointer px-1 py-0.5 rounded transition-colors duration-150" title="${formatTime(word.start)} - ${formatTime(word.end)}">${word.text} </span>`
-                            ).join('') :
-                            `<div class="text-gray-800 leading-relaxed">${data.transcription.text}</div>`
-                        }
-                    </div>
-                    <div class="text-xs text-gray-500 flex items-center justify-between">
-                        <span class="flex items-center">
-                            <svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z"/>
-                            </svg>
-                            ${new Date().toLocaleTimeString()}
-                        </span>
-                        <span>${data.transcription.wordCount || data.transcription.words?.length || 0} words</span>
-                    </div>
-                `;
-                
-                // Add to latest transcript area
-                latestTranscript.appendChild(transcriptDiv);
-                
-                // Remove animation class after animation
-                setTimeout(() => {
-                    transcriptDiv.classList.remove('new-transcript');
-                }, 300);
+            if (data.transcription && data.transcription.text) {
+                displayTranscription(data.transcription.text, data.transcription.cumulativeText);
             }
             
             if (data.summary) {
-                // Update summary
-                summaryArea.innerHTML = `
-                    <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-6 border-l-4 border-purple-400 h-full">
-                        <div class="prose prose-purple max-w-none">
-                            <div class="text-gray-800 leading-relaxed whitespace-pre-line">${data.summary}</div>
-                        </div>
-                    </div>
-                `;
-                
-                // Show and update timestamp
-                summaryTimestamp.textContent = `Updated ${new Date().toLocaleTimeString()}`;
-                summaryTimestamp.classList.remove('hidden');
+                displaySummary(data.summary);
             }
+        });
+
+        socket.on('error', (message) => {
+            console.error('❌ Socket error:', message);
+            updateStatus(`Error: ${message}`, "error");
+        });
+
+        socket.on('disconnect', () => {
+            console.log(`🔌 Disconnected from server${isPageVisible ? '' : ' [BACKGROUND]'}`);
+            updateStatus("Disconnected from server", "disconnected");
+            updateConnectionStatus(false);
+            stopRecording();
+        });
+
+        socket.on('reconnect', () => {
+            console.log(`🔌 Reconnected to server${isPageVisible ? '' : ' [BACKGROUND]'}`);
+            updateStatus("Reconnected to server", "connected");
+            updateConnectionStatus(true);
+            lastHeartbeatTime = Date.now();
+            
+            // If we were in a session, rejoin
+            if (currentSession && currentGroup) {
+                console.log(`🔄 Rejoining session ${currentSession}, group ${currentGroup}`);
+                socket.emit('join', { 
+                    code: currentSession, 
+                    group: parseInt(currentGroup) 
+                });
+            }
+        });
+
+        // Handle heartbeat responses (keep connection alive)
+        socket.on('heartbeat_ack', () => {
+            // Just acknowledge the heartbeat - keeps connection alive
+            if (!isPageVisible) {
+                console.log('💓 Heartbeat acknowledged [BACKGROUND]');
+            }
+            lastHeartbeatTime = Date.now(); // Update last heartbeat time on successful ack
+        });
+        
+        // Handle connection events
+        socket.on('connect', () => {
+            console.log('🔌 Student socket connected');
+            updateConnectionStatus(true);
+            lastHeartbeatTime = Date.now();
         });
 
         // Clean up on page unload
         window.addEventListener('beforeunload', () => {
-            if (rec && rec.state !== "inactive") {
-                rec.stop();
+            if (isRecording) {
+                stopRecording();
             }
-            if (stream) {
-                stream.getTracks().forEach(t => t.stop());
+            stopHeartbeat(); // Stop heartbeat on page unload
+        });
+        
+        // Quit confirmation handlers
+        
+        // Prevent accidental page closure when in session
+        window.addEventListener('beforeunload', (e) => {
+            if (hasJoinedSession) {
+                const message = 'Are you sure you want to leave the session? You will need to rejoin with the same session code and group number.';
+                e.preventDefault();
+                e.returnValue = message;
+                return message;
             }
         });
-
+        
         // Auto-focus session code input
         document.getElementById('sessionCode').focus();
+        
+        // Initialize background recording support
+        setupBackgroundRecording();
+        startHeartbeat(); // Start heartbeat on page load
 
         // Handle Enter key in inputs
         document.getElementById('sessionCode').addEventListener('keypress', (e) => {
@@ -414,7 +850,7 @@
 
         document.getElementById('groupNumber').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
-                document.getElementById('joinBtn').click();
+                document.getElementById('joinSessionForm').dispatchEvent(new Event('submit'));
             }
         });
 

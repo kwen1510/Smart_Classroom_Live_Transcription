@@ -6,13 +6,27 @@
     <title>Teacher Dashboard - Smart Classroom</title>
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <script>
         tailwind.config = {
             theme: {
                 extend: {
                     animation: {
                         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-                        'bounce-subtle': 'bounce 1s ease-in-out 2'
+                        'bounce-subtle': 'bounce 1s ease-in-out 2',
+                        'ping-slow': 'ping 2s cubic-bezier(0, 0, 0.2, 1) infinite',
+                        'fade-in': 'fadeIn 0.5s ease-out',
+                        'slide-up': 'slideUp 0.3s ease-out'
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' }
+                        },
+                        slideUp: {
+                            '0%': { opacity: '0', transform: 'translateY(20px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' }
+                        }
                     }
                 }
             }
@@ -25,26 +39,91 @@
         .glass { backdrop-filter: blur(10px); background: rgba(255, 255, 255, 0.1); }
         .transcript-expand { max-height: 200px; overflow: hidden; transition: max-height 0.3s ease; }
         .transcript-expand.expanded { max-height: 1000px; }
+        .connection-indicator { transition: all 0.3s ease; }
+        .group-card { min-height: 500px; display: flex; flex-direction: column; }
+        .group-card-content { flex: 1; display: flex; flex-direction: column; }
+        .group-card-body { flex: 1; }
+        .error-toast { 
+            position: fixed; 
+            top: 20px; 
+            right: 20px; 
+            z-index: 1000;
+            min-width: 300px;
+            max-width: 500px;
+        }
+        .upload-progress {
+            position: relative;
+            overflow: hidden;
+        }
+        .upload-progress::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            animation: shimmer 1.5s infinite;
+        }
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
   </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
+    <!-- Error Toast Container -->
+    <div id="errorToast" class="error-toast hidden">
+        <div class="bg-red-50 border-l-4 border-red-400 p-4 rounded-r-lg shadow-lg">
+            <div class="flex items-center">
+                <div class="flex-shrink-0">
+                    <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                    </svg>
+                </div>
+                <div class="ml-3">
+                    <h3 class="text-sm font-medium text-red-800">Upload Error</h3>
+                    <p id="errorMessage" class="mt-1 text-sm text-red-600"></p>
+                </div>
+                <div class="ml-auto pl-3">
+                    <button onclick="hideErrorToast()" class="text-red-400 hover:text-red-600">
+                        <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Header -->
     <header class="gradient-bg text-white shadow-xl">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
             <div class="flex items-center justify-between">
                 <div class="flex items-center space-x-4">
-                    <div class="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
-                        <svg class="w-7 h-7" fill="currentColor" viewBox="0 0 20 20">
-                            <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/>
+                    <div class="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm">
+                        <i data-lucide="graduation-cap" class="w-7 h-7 text-white"></i>
+                        <svg class="w-7 h-7 text-white lucide-fallback" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="display: none;">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 14l9-5-9-5-9 5 9 5z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 14l9-5-9-5-9 5 9 5zm0 0l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z"/>
                         </svg>
                     </div>
-                    <div>
-                        <h1 class="text-2xl font-bold">Teacher Dashboard</h1>
-                        <p class="text-white/80">Session: <span id="sessionCode" class="font-mono font-semibold">Loading...</span></p>
+                    <div class="flex-1">
+                        <h1 class="text-2xl font-bold">Smart Classroom</h1>
+                        <div class="flex items-center space-x-6 mt-1">
+                            <p class="text-white/90 text-sm">
+                                Session: <span id="sessionCode" class="font-mono font-semibold text-white">Loading...</span>
+                            </p>
+                            <div id="connectionStatus" class="flex items-center space-x-2 bg-white/10 px-3 py-1.5 rounded-full backdrop-blur-sm">
+                                <div id="connectionDot" class="w-2 h-2 bg-green-400 rounded-full animate-ping-slow"></div>
+                                <span id="connectionText" class="text-xs font-medium text-white">Connected</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="flex items-center space-x-3">
-                    <div class="flex items-center space-x-2">
+                <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-3 bg-white/10 px-4 py-2 rounded-lg backdrop-blur-sm">
                         <label for="intervalInput" class="text-sm font-medium text-white/90">Interval:</label>
                         <input 
                             type="number" 
@@ -56,15 +135,23 @@
                         >
                         <span class="text-sm text-white/80">sec</span>
                     </div>
-                    <a href="/history" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors">📚 History</a>
-                    <button id="startBtn" class="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-lg font-semibold transition-all duration-200 transform hover:scale-105 shadow-lg">
-                        <svg class="w-5 h-5 inline mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <a href="/history" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors flex items-center">
+                        <i data-lucide="history" class="w-4 h-4 mr-2"></i>
+                        <svg class="w-4 h-4 mr-2 lucide-fallback" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="display: none;">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        History
+                    </a>
+                    <button id="startBtn" class="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-lg font-semibold transition-all duration-200 transform hover:scale-105 shadow-lg flex items-center">
+                        <i data-lucide="play" class="w-5 h-5 mr-2"></i>
+                        <svg class="w-5 h-5 mr-2 lucide-fallback" fill="currentColor" viewBox="0 0 20 20" style="display: none;">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/>
                         </svg>
                         Start Recording
                     </button>
-                    <button id="stopBtn" disabled class="bg-red-500 hover:bg-red-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-semibold transition-all duration-200 shadow-lg">
-                        <svg class="w-5 h-5 inline mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <button id="stopBtn" disabled class="bg-red-500 hover:bg-red-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-semibold transition-all duration-200 shadow-lg flex items-center">
+                        <i data-lucide="square" class="w-5 h-5 mr-2"></i>
+                        <svg class="w-5 h-5 mr-2 lucide-fallback" fill="currentColor" viewBox="0 0 20 20" style="display: none;">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z"/>
                         </svg>
                         Stop Recording
@@ -107,7 +194,7 @@
                         <div>
                             <label for="promptText" class="block text-sm font-medium text-gray-700 mb-2">
                                 Summarization Prompt
-  </label>
+                            </label>
                             <textarea 
                                 id="promptText" 
                                 rows="4" 
@@ -172,313 +259,499 @@
   <script>
     const socket = io();
     let sessionCode = null;
-        const groups = new Map();
+    const groups = new Map();
+    let heartbeatInterval = null;
+    let connectionCheckInterval = null;
+    let lastHeartbeatTime = Date.now();
+    let isConnected = true;
+    
+    // Error handling
+    function showErrorToast(message) {
+        const errorToast = document.getElementById('errorToast');
+        const errorMessage = document.getElementById('errorMessage');
         
-        // Default prompt
-        const DEFAULT_PROMPT = "Summarise the following classroom discussion in ≤6 clear bullet points:";
+        errorMessage.textContent = message;
+        errorToast.classList.remove('hidden');
+        errorToast.classList.add('animate-slide-up');
         
-        // Create new session on load
-        fetch('/api/new-session')
-            .then(res => res.json())
-            .then(data => {
-      sessionCode = data.code;
-                document.getElementById('sessionCode').textContent = sessionCode;
-                socket.emit('admin_join', { code: sessionCode });
-                
-                // Load saved prompt for this session
-                loadSessionPrompt();
-            })
-            .catch(err => console.error('Failed to create session:', err));
-        
-        // Prompt Editor Functions
-        function togglePromptEditor() {
-            const editor = document.getElementById('promptEditor');
-            const chevron = document.getElementById('promptChevron');
-            
-            if (editor.classList.contains('hidden')) {
-                editor.classList.remove('hidden');
-                chevron.classList.add('rotate-180');
+        // Auto-hide after 10 seconds
+        setTimeout(() => {
+            hideErrorToast();
+        }, 10000);
+    }
+    
+    function hideErrorToast() {
+        const errorToast = document.getElementById('errorToast');
+        errorToast.classList.add('hidden');
+        errorToast.classList.remove('animate-slide-up');
+    }
+    
+    // Initialize Lucide icons
+    document.addEventListener('DOMContentLoaded', () => {
+        try {
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+                console.log('✅ Lucide icons initialized successfully');
             } else {
-                editor.classList.add('hidden');
-                chevron.classList.remove('rotate-180');
+                console.warn('⚠️ Lucide library not loaded, using fallback icons');
+                showFallbackIcons();
             }
+        } catch (error) {
+            console.error('❌ Error initializing Lucide icons:', error);
+            showFallbackIcons();
+        }
+    });
+    
+    // Backup initialization with timeout
+    setTimeout(() => {
+        try {
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+                console.log('✅ Lucide icons re-initialized via timeout');
+            } else {
+                console.warn('⚠️ Lucide library still not loaded, using fallback icons');
+                showFallbackIcons();
+            }
+        } catch (error) {
+            console.error('❌ Error in backup icon initialization:', error);
+            showFallbackIcons();
+        }
+    }, 1000);
+    
+    // Show fallback SVG icons if Lucide fails to load
+    function showFallbackIcons() {
+        const lucideIcons = document.querySelectorAll('[data-lucide]');
+        const fallbackIcons = document.querySelectorAll('.lucide-fallback');
+        
+        lucideIcons.forEach(icon => {
+            icon.style.display = 'none';
+        });
+        
+        fallbackIcons.forEach(icon => {
+            icon.style.display = 'inline-block';
+        });
+        
+        console.log('🔄 Switched to fallback icons');
+    }
+    
+    // Connection status management
+    function updateConnectionStatus(connected) {
+        const dot = document.getElementById('connectionDot');
+        const text = document.getElementById('connectionText');
+        
+        if (connected && !isConnected) {
+            // Reconnected
+            dot.className = 'w-2 h-2 bg-green-400 rounded-full animate-ping-slow';
+            text.textContent = 'Connected';
+            text.className = 'text-xs font-medium text-white';
+            isConnected = true;
+            console.log('🟢 Admin dashboard connected');
+        } else if (!connected && isConnected) {
+            // Disconnected
+            dot.className = 'w-2 h-2 bg-red-400 rounded-full animate-pulse';
+            text.textContent = 'Disconnected';
+            text.className = 'text-xs font-medium text-red-200';
+            isConnected = false;
+            console.log('🔴 Admin dashboard disconnected');
+            showErrorToast('Connection lost. Attempting to reconnect...');
+        }
+    }
+    
+    // Start heartbeat system
+    function startHeartbeat() {
+        // Send heartbeat every 30 seconds
+        heartbeatInterval = setInterval(() => {
+            if (socket.connected && sessionCode) {
+                socket.emit('admin_heartbeat', { sessionCode });
+                console.log('💓 Admin heartbeat sent');
+            }
+        }, 30000);
+        
+        // Check connection status every 5 seconds
+        connectionCheckInterval = setInterval(() => {
+            const now = Date.now();
+            const timeSinceLastHeartbeat = now - lastHeartbeatTime;
+            
+            // Consider disconnected if no heartbeat response in 45 seconds
+            if (timeSinceLastHeartbeat > 45000) {
+                updateConnectionStatus(false);
+            } else {
+                updateConnectionStatus(true);
+            }
+        }, 5000);
+    }
+    
+    // Stop heartbeat system
+    function stopHeartbeat() {
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = null;
+        }
+        if (connectionCheckInterval) {
+            clearInterval(connectionCheckInterval);
+            connectionCheckInterval = null;
+        }
+    }
+    
+    // Default prompt
+    const DEFAULT_PROMPT = "Summarise the following classroom discussion in ≤6 clear bullet points:";
+    
+    // Create new session on page load
+    fetch('/api/new-session')
+        .then(res => res.json())
+        .then(data => {
+            sessionCode = data.code;
+            document.getElementById('sessionCode').textContent = sessionCode;
+            socket.emit('admin_join', { code: sessionCode });
+            
+            // Start heartbeat system
+            startHeartbeat();
+            
+            // Load saved prompt for this session
+            loadSessionPrompt();
+        })
+        .catch(err => {
+            console.error('Failed to create session:', err);
+            showErrorToast('Failed to create session. Please refresh the page.');
+        });
+    
+    // Prompt Editor Functions
+    function togglePromptEditor() {
+        const editor = document.getElementById('promptEditor');
+        const chevron = document.getElementById('promptChevron');
+        
+        if (editor.classList.contains('hidden')) {
+            editor.classList.remove('hidden');
+            chevron.classList.add('rotate-180');
+        } else {
+            editor.classList.add('hidden');
+            chevron.classList.remove('rotate-180');
+        }
+    }
+    
+    function resetToDefaultPrompt() {
+        document.getElementById('promptText').value = DEFAULT_PROMPT;
+        showPromptFeedback('Prompt reset to default', 'info');
+    }
+    
+    async function savePrompt() {
+        const promptText = document.getElementById('promptText').value.trim();
+        
+        if (!promptText) {
+            showPromptFeedback('Please enter a prompt before saving', 'error');
+            return;
         }
         
-        function resetToDefaultPrompt() {
-            document.getElementById('promptText').value = DEFAULT_PROMPT;
-            showPromptFeedback('Prompt reset to default', 'info');
+        try {
+            const response = await fetch(`/api/session/${sessionCode}/prompt`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt: promptText })
+            });
+            
+            if (response.ok) {
+                showPromptFeedback('Prompt saved successfully! It will be used for all new summaries.', 'success');
+            } else {
+                const error = await response.json();
+                showPromptFeedback(`Failed to save prompt: ${error.error || error.message || 'Unknown error'}`, 'error');
+            }
+        } catch (err) {
+            console.error('Error saving prompt:', err);
+            showPromptFeedback('Error saving prompt. Please try again.', 'error');
+        }
+    }
+    
+    async function testPrompt() {
+        const promptText = document.getElementById('promptText').value.trim();
+        
+        if (!promptText) {
+            showPromptFeedback('Please enter a prompt before testing', 'error');
+            return;
         }
         
-        async function savePrompt() {
-            const promptText = document.getElementById('promptText').value.trim();
-            
-            if (!promptText) {
-                showPromptFeedback('Please enter a prompt before saving', 'error');
-                return;
-            }
-            
-            try {
-                const response = await fetch(`/api/session/${sessionCode}/prompt`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt: promptText })
-                });
-                
-                if (response.ok) {
-                    showPromptFeedback('Prompt saved successfully! It will be used for all new summaries.', 'success');
-                } else {
-                    const error = await response.json();
-                    showPromptFeedback(`Failed to save prompt: ${error.message}`, 'error');
-                }
-            } catch (err) {
-                console.error('Error saving prompt:', err);
-                showPromptFeedback('Error saving prompt. Please try again.', 'error');
-            }
-        }
+        // Sample classroom discussion text for testing
+        const sampleText = "Student A: I think renewable energy is really important for our future. Student B: Yeah, but what about the costs? Solar panels are expensive. Student C: True, but they save money in the long run. Teacher: Great points! What about government incentives? Student A: Oh right, there are tax credits that help reduce the initial cost. Student B: That makes it more affordable then. Student C: Plus think about the environmental benefits - reduced carbon emissions, cleaner air. Teacher: Excellent discussion on the economic and environmental aspects of renewable energy.";
         
-        async function testPrompt() {
-            const promptText = document.getElementById('promptText').value.trim();
+        try {
+            showPromptFeedback('Testing prompt... This may take a few seconds.', 'info');
             
-            if (!promptText) {
-                showPromptFeedback('Please enter a prompt before testing', 'error');
-                return;
-            }
-            
-            // Sample classroom discussion text for testing
-            const sampleText = "Student A: I think renewable energy is really important for our future. Student B: Yeah, but what about the costs? Solar panels are expensive. Student C: True, but they save money in the long run. Teacher: Great points! What about government incentives? Student A: Oh right, there are tax credits that help reduce the initial cost. Student B: That makes it more affordable then. Student C: Plus think about the environmental benefits - reduced carbon emissions, cleaner air. Teacher: Excellent discussion on the economic and environmental aspects of renewable energy.";
-            
-            try {
-                showPromptFeedback('Testing prompt... This may take a few seconds.', 'info');
-                
-                const response = await fetch('/api/test-summary', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        text: sampleText,
-                        customPrompt: promptText 
-                    })
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    showPromptFeedback(`Test successful! Sample output: "${result.summary}"`, 'success');
-                } else {
-                    showPromptFeedback(`Test failed: ${result.error}`, 'error');
-                }
-            } catch (err) {
-                console.error('Error testing prompt:', err);
-                showPromptFeedback('Error testing prompt. Please try again.', 'error');
-            }
-        }
-        
-        async function loadSessionPrompt() {
-            try {
-                const response = await fetch(`/api/session/${sessionCode}/prompt`);
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.prompt) {
-                        document.getElementById('promptText').value = data.prompt;
-                    }
-                }
-            } catch (err) {
-                console.log('No saved prompt found, using default');
-            }
-        }
-        
-        function showPromptFeedback(message, type) {
-            const feedback = document.getElementById('promptFeedback');
-            const colors = {
-                success: 'bg-green-50 border-green-200 text-green-800',
-                error: 'bg-red-50 border-red-200 text-red-800',
-                info: 'bg-blue-50 border-blue-200 text-blue-800'
-            };
-            
-            feedback.className = `p-4 rounded-lg border ${colors[type]}`;
-            feedback.textContent = message;
-            feedback.classList.remove('hidden');
-            
-            // Auto-hide after 5 seconds for non-error messages
-            if (type !== 'error') {
-                setTimeout(() => {
-                    feedback.classList.add('hidden');
-                }, 5000);
-            }
-        }
-        
-        // Format timestamp
-        function formatTime(timestamp) {
-            if (!timestamp) return 'N/A';
-            const date = new Date(timestamp);
-            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        }
-        
-        // Format duration
-        function formatDuration(seconds) {
-            if (!seconds) return '0:00';
-            const mins = Math.floor(seconds / 60);
-            const secs = Math.floor(seconds % 60);
-            return `${mins}:${secs.toString().padStart(2, '0')}`;
-        }
-
-        // Format summary text with proper bullet points and line breaks
-        function formatSummaryText(text) {
-            if (!text) return '';
-            
-            return text
-                // Replace bullet point markers with HTML
-                .replace(/^[-•·*]\s+/gm, '<li>')
-                .replace(/^\d+\.\s+/gm, '<li>')
-                // Wrap lines that start with <li> in a ul
-                .split('\n')
-                .map(line => {
-                    line = line.trim();
-                    if (line.startsWith('<li>')) {
-                        return line + '</li>';
-                    }
-                    return line;
+            const response = await fetch('/api/test-summary', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    text: sampleText,
+                    customPrompt: promptText 
                 })
-                .join('\n')
-                // Group consecutive <li> items into <ul>
-                .replace(/(<li>.*?<\/li>\n?)+/gs, match => `<ul class="list-disc list-inside space-y-1 mb-3">${match}</ul>`)
-                // Replace double line breaks with paragraphs
-                .replace(/\n\n+/g, '</p><p class="mb-3">')
-                // Wrap in paragraph if not already wrapped
-                .replace(/^(?!<[pu])/gm, '<p class="mb-3">')
-                .replace(/(?<!>)$/gm, '</p>')
-                // Clean up empty paragraphs
-                .replace(/<p class="mb-3"><\/p>/g, '')
-                .replace(/^<p class="mb-3">/, '')
-                .replace(/<\/p>$/, '');
-        }
-
-        // Toggle transcript expansion
-        function toggleTranscripts(groupNumber) {
-            const transcriptDiv = document.getElementById(`transcripts-${groupNumber}`);
-            const toggleBtn = document.getElementById(`toggle-${groupNumber}`);
-            const icon = toggleBtn.querySelector('svg');
+            });
             
-            if (transcriptDiv.classList.contains('expanded')) {
-                transcriptDiv.classList.remove('expanded');
-                toggleBtn.innerHTML = `
-                    <svg class="w-4 h-4 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                    </svg>
-                    <span class="ml-2">Show Full Transcript</span>
-                `;
+            const result = await response.json();
+            
+            if (response.ok) {
+                showPromptFeedback(`Test successful! Sample output: "${result.summary}"`, 'success');
             } else {
-                transcriptDiv.classList.add('expanded');
-                toggleBtn.innerHTML = `
-                    <svg class="w-4 h-4 transition-transform duration-200 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                    </svg>
-                    <span class="ml-2">Show Less</span>
-                `;
+                showPromptFeedback(`Test failed: ${result.error}`, 'error');
+            }
+        } catch (err) {
+            console.error('Error testing prompt:', err);
+            showPromptFeedback('Error testing prompt. Please try again.', 'error');
+        }
+    }
+    
+    async function loadSessionPrompt() {
+        try {
+            const response = await fetch(`/api/session/${sessionCode}/prompt`);
+            if (response.ok) {
+                const data = await response.json();
+                if (data.prompt) {
+                    document.getElementById('promptText').value = data.prompt;
+                }
+            }
+        } catch (err) {
+            console.log('No saved prompt found, using default');
+        }
+    }
+    
+    function showPromptFeedback(message, type) {
+        const feedback = document.getElementById('promptFeedback');
+        const colors = {
+            success: 'bg-green-50 border-green-200 text-green-800',
+            error: 'bg-red-50 border-red-200 text-red-800',
+            info: 'bg-blue-50 border-blue-200 text-blue-800'
+        };
+        
+        feedback.className = `p-4 rounded-lg border ${colors[type]}`;
+        feedback.textContent = message;
+        feedback.classList.remove('hidden');
+        
+        // Auto-hide after 5 seconds for non-error messages
+        if (type !== 'error') {
+            setTimeout(() => {
+                feedback.classList.add('hidden');
+            }, 5000);
+        }
+    }
+    
+    function showTemporaryMessage(message, type) {
+        // Create a temporary notification
+        const notification = document.createElement('div');
+        notification.className = `fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg transition-all duration-300 transform translate-x-full`;
+        
+        const colors = {
+            success: 'bg-green-50 border-green-200 text-green-800 border',
+            error: 'bg-red-50 border-red-200 text-red-800 border',
+            info: 'bg-blue-50 border-blue-200 text-blue-800 border'
+        };
+        
+        notification.className += ` ${colors[type]}`;
+        notification.textContent = message;
+        
+        document.body.appendChild(notification);
+        
+        // Animate in
+        setTimeout(() => {
+            notification.classList.remove('translate-x-full');
+        }, 100);
+        
+        // Auto-hide after 4 seconds
+        setTimeout(() => {
+            notification.classList.add('translate-x-full');
+            setTimeout(() => {
+                if (document.body.contains(notification)) {
+                    document.body.removeChild(notification);
+                }
+            }, 300);
+        }, 4000);
+    }
+    
+    // Format timestamp
+    function formatTime(timestamp) {
+        if (!timestamp) return 'N/A';
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+    
+    // Format duration
+    function formatDuration(seconds) {
+        if (!seconds) return '0:00';
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    // Format summary text with proper bullet points and line breaks
+    function formatSummaryText(text) {
+        if (!text) return '';
+        
+        return text
+            // Replace bullet point markers with HTML
+            .replace(/^[-•·*]\s+/gm, '<li>')
+            .replace(/^\d+\.\s+/gm, '<li>')
+            // Wrap lines that start with <li> in a ul
+            .split('\n')
+            .map(line => {
+                line = line.trim();
+                if (line.startsWith('<li>')) {
+                    return line + '</li>';
+                }
+                return line;
+            })
+            .join('\n')
+            // Group consecutive <li> items into <ul>
+            .replace(/(<li>.*?<\/li>\n?)+/gs, match => `<ul class="list-disc list-inside space-y-1 mb-3">${match}</ul>`)
+            // Replace double line breaks with paragraphs
+            .replace(/\n\n+/g, '</p><p class="mb-3">')
+            // Wrap in paragraph if not already wrapped
+            .replace(/^(?!<[pu])/gm, '<p class="mb-3">')
+            .replace(/(?<!>)$/gm, '</p>')
+            // Clean up empty paragraphs
+            .replace(/<p class="mb-3"><\/p>/g, '')
+            .replace(/^<p class="mb-3">/, '')
+            .replace(/<\/p>$/, '');
+    }
+
+    // Toggle transcript expansion
+    function toggleTranscripts(groupNumber) {
+        const transcriptDiv = document.getElementById(`transcripts-${groupNumber}`);
+        const toggleBtn = document.getElementById(`toggle-${groupNumber}`);
+        
+        if (transcriptDiv.classList.contains('expanded')) {
+            transcriptDiv.classList.remove('expanded');
+            toggleBtn.innerHTML = `
+                <svg class="w-4 h-4 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+                <span class="ml-2">Show Full Transcript</span>
+            `;
+        } else {
+            transcriptDiv.classList.add('expanded');
+            toggleBtn.innerHTML = `
+                <svg class="w-4 h-4 transition-transform duration-200 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+                <span class="ml-2">Show Less</span>
+            `;
+        }
+    }
+    
+    // Update or create group element
+    function updateGroup(groupNumber, data) {
+        // Hide empty state and show grid
+        document.getElementById('emptyState').classList.add('hidden');
+        document.getElementById('groupsGrid').classList.remove('hidden');
+        
+        let groupEl = document.getElementById(`group-${groupNumber}`);
+        if (!groupEl) {
+            groupEl = document.createElement('div');
+            groupEl.id = `group-${groupNumber}`;
+            groupEl.className = 'group-card animate-fade-in';
+            document.getElementById('groupsGrid').appendChild(groupEl);
+        }
+        
+        // Update group data
+        const groupData = groups.get(groupNumber) || {
+            transcripts: [],
+            summary: null,
+            stats: {},
+            lastUpdate: Date.now(),
+            cumulativeTranscript: null,
+            uploadErrors: 0 // Track upload errors
+        };
+        
+        // Handle existing transcripts (when loading from database)
+        if (data.existingTranscripts && data.existingTranscripts.length > 0) {
+            groupData.transcripts = data.existingTranscripts;
+        } else if (data.latestTranscript) {
+            // Handle new transcript (real-time updates)
+            groupData.transcripts.push({
+                text: data.latestTranscript,
+                timestamp: Date.now(),
+                duration: data.transcriptDuration || 0,
+                wordCount: data.transcriptWordCount || 0
+            });
+            if (groupData.transcripts.length > 10) {
+                groupData.transcripts = groupData.transcripts.slice(-10); // Keep last 10
             }
         }
         
-        // Update or create group element
-        function updateGroup(groupNumber, data) {
-            // Hide empty state and show grid
-            document.getElementById('emptyState').classList.add('hidden');
-            document.getElementById('groupsGrid').classList.remove('hidden');
-            
-            let groupEl = document.getElementById(`group-${groupNumber}`);
-            if (!groupEl) {
-                groupEl = document.createElement('div');
-                groupEl.id = `group-${groupNumber}`;
-                groupEl.className = 'group-card';
-                document.getElementById('groupsGrid').appendChild(groupEl);
-            }
-            
-            // Update group data
-            const groupData = groups.get(groupNumber) || {
-                transcripts: [],
-                summary: null,
-                stats: {},
-                lastUpdate: Date.now()
+        // Store cumulative transcript if provided
+        if (data.cumulativeTranscript) {
+            groupData.cumulativeTranscript = data.cumulativeTranscript;
+        }
+        
+        if (data.summary) {
+            groupData.summary = {
+                text: data.summary,
+                timestamp: Date.now()
             };
-            
-            // Handle existing transcripts (when loading from database)
-            if (data.existingTranscripts && data.existingTranscripts.length > 0) {
-                groupData.transcripts = data.existingTranscripts;
-            } else if (data.latestTranscript) {
-                // Handle new transcript (real-time updates)
-                groupData.transcripts.unshift({
-                    text: data.latestTranscript,
-                    timestamp: Date.now(),
-                    duration: data.transcriptDuration || 0,
-                    wordCount: data.transcriptWordCount || 0
-                });
-                if (groupData.transcripts.length > 10) {
-                    groupData.transcripts = groupData.transcripts.slice(0, 10);
-                }
-            }
-            if (data.summary) {
-                groupData.summary = {
-                    text: data.summary,
-                    timestamp: Date.now()
-                };
-            }
-            if (data.stats) {
-                groupData.stats = data.stats;
-            }
-            
-            groups.set(groupNumber, groupData);
-            
-            // Update UI
-            groupEl.innerHTML = `
-                <div class="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden transition-all duration-300 hover:shadow-xl">
-                    <!-- Group Header -->
-                    <div class="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-6">
-                        <div class="flex items-center justify-between">
-                            <div class="flex items-center space-x-3">
-                                <div class="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
-                                    <span class="text-lg font-bold">${groupNumber}</span>
-                                </div>
-                                <div>
-                                    <h3 class="text-lg font-semibold">Group ${groupNumber}</h3>
-                                    <p class="text-white/80 text-sm">${groupData.stats.totalSegments || 0} segments</p>
-                                </div>
+        }
+        if (data.stats) {
+            groupData.stats = data.stats;
+        }
+        
+        // Handle upload errors
+        if (data.uploadError) {
+            groupData.uploadErrors++;
+            showErrorToast(`Group ${groupNumber}: ${data.uploadError}`);
+        }
+        
+        groups.set(groupNumber, groupData);
+        
+        // Update UI
+        groupEl.innerHTML = `
+            <div class="group-card-content bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden transition-all duration-300 hover:shadow-xl">
+                <!-- Group Header -->
+                <div class="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-6">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
+                                <span class="text-lg font-bold">${groupNumber}</span>
                             </div>
-                            <div class="flex items-center space-x-2">
-                                ${data.isActive ? 
-                                    '<div class="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div><span class="text-sm font-medium">Active</span>' :
-                                    '<div class="w-3 h-3 bg-gray-400 rounded-full"></div><span class="text-sm">Waiting</span>'
-                                }
+                            <div>
+                                <h3 class="text-lg font-semibold">Group ${groupNumber}</h3>
+                                <p class="text-white/80 text-sm">${groupData.stats.totalSegments || 0} segments</p>
                             </div>
                         </div>
+                        <div class="flex items-center space-x-2">
+                            ${data.isActive ? 
+                                '<div class="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div><span class="text-sm font-medium">Active</span>' :
+                                '<div class="w-3 h-3 bg-gray-400 rounded-full"></div><span class="text-sm">Waiting</span>'
+                            }
+                            ${groupData.uploadErrors > 0 ? 
+                                `<div class="w-3 h-3 bg-red-400 rounded-full animate-pulse ml-2"></div><span class="text-xs text-red-200">${groupData.uploadErrors} errors</span>` :
+                                ''
+                            }
+                        </div>
                     </div>
+                </div>
 
-                    <!-- Summary Section -->
-                    <div class="p-6 border-b border-gray-100">
-                        <div class="flex items-center mb-3">
-                            <div class="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center mr-3">
-                                <svg class="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                                </svg>
-                            </div>
-                            <h4 class="font-semibold text-gray-900">Live Summary</h4>
-                            ${groupData.summary ? `<span class="ml-auto text-xs text-gray-500">${formatTime(groupData.summary.timestamp)}</span>` : ''}
+                <!-- Summary Section -->
+                <div class="group-card-body p-6 border-b border-gray-100">
+                    <div class="flex items-center mb-3">
+                        <div class="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center mr-3">
+                            <svg class="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            </svg>
                         </div>
-                        ${groupData.summary ? `
-                            <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-4 border-l-4 border-purple-400">
-                                <div class="text-gray-800 leading-relaxed prose prose-sm max-w-none">
-                                    ${formatSummaryText(groupData.summary.text)}
-                                </div>
-                            </div>
-                        ` : `
-                            <div class="bg-gray-50 rounded-lg p-4 text-center">
-                                <svg class="w-8 h-8 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
-                                </svg>
-                                <p class="text-gray-500 text-sm">No summary available yet</p>
-                            </div>
-                        `}
+                        <h4 class="font-semibold text-gray-900">Live Summary</h4>
+                        ${groupData.summary ? `<span class="ml-auto text-xs text-gray-500">${formatTime(groupData.summary.timestamp)}</span>` : ''}
                     </div>
+                    ${groupData.summary ? `
+                        <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-4 border-l-4 border-purple-400">
+                            <div class="text-gray-800 leading-relaxed prose prose-sm max-w-none">
+                                ${formatSummaryText(groupData.summary.text)}
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="bg-gray-50 rounded-lg p-4 text-center">
+                            <svg class="w-8 h-8 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                            </svg>
+                            <p class="text-gray-500 text-sm">No summary available yet</p>
+                        </div>
+                    `}
 
                     <!-- Transcript Section -->
-                    <div class="p-6">
+                    <div class="mt-6">
                         <button 
                             id="toggle-${groupNumber}"
                             onclick="toggleTranscripts(${groupNumber})"
@@ -491,139 +764,320 @@
                         </button>
                         
                         <div id="transcripts-${groupNumber}" class="transcript-expand space-y-3">
-                            ${groupData.transcripts.length ? 
-                                groupData.transcripts.map((transcript, index) => `
-                                    <div class="bg-gray-50 rounded-lg p-4 border-l-4 ${index === 0 ? 'border-blue-400 bg-blue-50' : 'border-gray-300'}">
-                                        ${index === 0 ? `
-                                            <div class="flex items-center mb-2">
-                                                <span class="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-1 rounded uppercase tracking-wide">Most Recent</span>
-                                                <span class="ml-2 text-xs text-gray-500">${transcript.duration ? `${transcript.duration.toFixed(1)}s` : 'Unknown duration'}</span>
-                                            </div>
-                                            <div class="text-gray-800 mb-2 font-medium leading-relaxed">${transcript.text}</div>
-                                        ` : `
-                                            <div class="text-gray-700 mb-2 leading-relaxed">${transcript.text}</div>
-                                        `}
-                                        <div class="flex items-center justify-between text-xs text-gray-500">
-                                            <span>${formatTime(transcript.timestamp)}</span>
-                                            ${transcript.wordCount ? `<span>${transcript.wordCount} words</span>` : ''}
+                            ${(() => {
+                                const transcripts = groupData.transcripts || [];
+                                const latestTranscript = transcripts.length ? transcripts[transcripts.length - 1] : null;
+                                const previousTranscripts = transcripts.length > 1 ? transcripts.slice(0, -1).reverse() : [];
+                                
+                                let html = '';
+                                
+                                // Show loading state if no data yet
+                                if (transcripts.length === 0 && !data.isActive) {
+                                    html += `
+                                        <div class="text-center py-8 text-gray-500">
+                                            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-3"></div>
+                                            <p class="text-sm">Loading transcripts...</p>
                                         </div>
-                                    </div>
-                                `).join('') :
-                                `<div class="text-center py-8 text-gray-500">
-                                    <svg class="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
-                                    </svg>
-                                    <p>No transcripts yet</p>
-                                </div>`
-                            }
-                        </div>
-                    </div>
-
-                    <!-- Stats Footer -->
-                    <div class="bg-gray-50 px-6 py-4 grid grid-cols-3 gap-4 text-center">
-                        <div>
-                            <div class="text-lg font-bold text-indigo-600">${groupData.stats.totalWords || 0}</div>
-                            <div class="text-xs text-gray-500 uppercase tracking-wide">Words</div>
-                        </div>
-                        <div>
-                            <div class="text-lg font-bold text-green-600">${formatDuration(groupData.stats.totalDuration)}</div>
-                            <div class="text-xs text-gray-500 uppercase tracking-wide">Duration</div>
-                        </div>
-                        <div>
-                            <div class="text-lg font-bold text-purple-600">${groupData.stats.totalSegments || 0}</div>
-                            <div class="text-xs text-gray-500 uppercase tracking-wide">Segments</div>
+                                    `;
+                                    return html;
+                                }
+                                
+                                // Show cumulative conversation if available (like student interface)
+                                if (groupData.cumulativeTranscript && latestTranscript) {
+                                    html += `
+                                        <div class="bg-blue-50 rounded-lg p-4 border-l-4 border-blue-400 mb-4">
+                                            <div class="flex items-center mb-2">
+                                                <span class="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-1 rounded uppercase tracking-wide">Full Conversation</span>
+                                                <span class="ml-2 text-xs text-gray-500">${formatTime(latestTranscript.timestamp)}</span>
+                                            </div>
+                                            <div class="text-gray-800 mb-3 leading-relaxed">${groupData.cumulativeTranscript}</div>
+                                            <div class="text-xs text-gray-500 border-t pt-2 mt-2">
+                                                <span class="font-medium">Latest chunk:</span> "${latestTranscript.text}"
+                                            </div>
+                                        </div>
+                                    `;
+                                } else if (latestTranscript) {
+                                    // Fallback to individual transcript display if no cumulative text
+                                    html += `
+                                        <div class="bg-blue-50 rounded-lg p-4 border-l-4 border-blue-400 mb-4">
+                                            <div class="flex items-center mb-2">
+                                                <span class="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-1 rounded uppercase tracking-wide">Latest Transcript</span>
+                                                <span class="ml-2 text-xs text-gray-500">${latestTranscript.duration ? `${latestTranscript.duration.toFixed(1)}s` : 'Unknown duration'}</span>
+                                            </div>
+                                            <div class="text-gray-800 mb-2 font-medium leading-relaxed">${latestTranscript.text}</div>
+                                            <div class="flex items-center justify-between text-xs text-gray-500">
+                                                <span>${formatTime(latestTranscript.timestamp)}</span>
+                                                ${latestTranscript.wordCount ? `<span>${latestTranscript.wordCount} words</span>` : ''}
+                                            </div>
+                                        </div>
+                                    `;
+                                }
+                                
+                                // Show previous transcripts below
+                                if (previousTranscripts.length > 0) {
+                                    html += `
+                                        <h5 class="text-xs font-semibold text-gray-500 mb-2">Previous Transcripts</h5>
+                                        <div class="space-y-2">
+                                            ${previousTranscripts.map(transcript => `
+                                                <div class="bg-gray-50 rounded p-3 text-sm">
+                                                    <div class="text-gray-800 mb-1">${transcript.text}</div>
+                                                    <div class="text-xs text-gray-500">
+                                                        ${formatTime(transcript.timestamp)} • 
+                                                        ${transcript.wordCount} words • 
+                                                        ${transcript.duration ? transcript.duration.toFixed(1) + 's' : 'No duration'}
+                                                    </div>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    `;
+                                }
+                                
+                                // Show empty state if no transcripts
+                                if (!latestTranscript && previousTranscripts.length === 0 && data.isActive) {
+                                    html += `
+                                        <div class="text-center py-8 text-gray-500">
+                                            <svg class="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+                                            </svg>
+                                            <p>No transcripts yet</p>
+                                        </div>
+                                    `;
+                                }
+                                
+                                return html;
+                            })()}
                         </div>
                     </div>
                 </div>
-            `;
-        }
+
+                <!-- Stats Footer -->
+                <div class="bg-gray-50 px-6 py-4 grid grid-cols-3 gap-4 text-center">
+                    <div class="flex flex-col items-center">
+                        <div class="text-lg font-bold text-indigo-600">${groupData.stats.totalWords || 0}</div>
+                        <div class="text-xs text-gray-500 uppercase tracking-wide">Words</div>
+                    </div>
+                    <div class="flex flex-col items-center">
+                        <div class="text-lg font-bold text-green-600">${formatDuration(groupData.stats.totalDuration)}</div>
+                        <div class="text-xs text-gray-500 uppercase tracking-wide">Duration</div>
+                    </div>
+                    <div class="flex flex-col items-center">
+                        <div class="text-lg font-bold text-purple-600">${groupData.stats.totalSegments || 0}</div>
+                        <div class="text-xs text-gray-500 uppercase tracking-wide">Segments</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    // Socket event handlers
+    socket.on('student_joined', ({ group, socketId }) => {
+        console.log(`Student joined group ${group}`);
+        updateGroup(group, { isActive: true });
         
-        // Socket event handlers
-        socket.on('student_joined', ({ group, socketId }) => {
-            console.log(`Student joined group ${group}`);
-            updateGroup(group, { isActive: true });
-            
-            // Fetch existing data for this group
-            fetch(`/api/session/${sessionCode}/group/${group}/transcripts`)
-                .then(res => res.json())
-                .then(data => {
-                    // Format existing transcripts with proper structure
-                    const formattedTranscripts = data.transcripts.map(t => ({
-                        text: t.text,
-                        timestamp: new Date(t.created_at).getTime(),
-                        duration: t.duration_seconds || 0,
-                        wordCount: t.word_count || 0
-                    }));
-                    
-                    updateGroup(group, {
-                        latestTranscript: data.transcripts[0]?.text,
-                        transcriptDuration: data.transcripts[0]?.duration_seconds || 0,
-                        transcriptWordCount: data.transcripts[0]?.word_count || 0,
-                        summary: data.summary?.text,
-                        stats: data.stats,
-                        isActive: true,
-                        existingTranscripts: formattedTranscripts
-                    });
-                })
-                .catch(err => console.error('Failed to fetch group data:', err));
+        // Fetch existing data for this group
+        fetch(`/api/session/${sessionCode}/group/${group}/transcripts`)
+            .then(res => res.json())
+            .then(data => {
+                // Format existing transcripts with proper structure
+                const formattedTranscripts = data.transcripts.map(t => ({
+                    text: t.text,
+                    timestamp: new Date(t.created_at).getTime(),
+                    duration: t.duration_seconds || 0,
+                    wordCount: t.word_count || 0
+                }));
+                
+                updateGroup(group, {
+                    latestTranscript: data.transcripts[0]?.text,
+                    transcriptDuration: data.transcripts[0]?.duration_seconds || 0,
+                    transcriptWordCount: data.transcripts[0]?.word_count || 0,
+                    summary: data.summary?.text,
+                    stats: data.stats,
+                    isActive: true,
+                    existingTranscripts: formattedTranscripts
+                });
+            })
+            .catch(err => {
+                console.error('Failed to fetch group data:', err);
+                updateGroup(group, { 
+                    isActive: true, 
+                    uploadError: 'Failed to load existing data' 
+                });
+            });
+    });
+    
+    socket.on('admin_update', (data) => {
+        console.log('Received admin update:', data);
+        updateGroup(data.group, {
+            latestTranscript: data.latestTranscript,
+            cumulativeTranscript: data.cumulativeTranscript,
+            summary: data.summary,
+            stats: data.stats,
+            isActive: true
         });
         
-        socket.on('admin_update', (data) => {
-            console.log('Received admin update:', data);
-            updateGroup(data.group, {
-                latestTranscript: data.latestTranscript,
-                summary: data.summary,
-                stats: data.stats,
-                isActive: true
+        // Add subtle animation to show update
+        const groupEl = document.getElementById(`group-${data.group}`);
+        if (groupEl) {
+            groupEl.classList.add('animate-bounce-subtle');
+            setTimeout(() => groupEl.classList.remove('animate-bounce-subtle'), 1000);
+            
+            // Add a brief highlight to the latest transcript
+            const latestTranscriptEl = groupEl.querySelector('.bg-blue-50');
+            if (latestTranscriptEl) {
+                latestTranscriptEl.classList.add('ring-2', 'ring-blue-300');
+                setTimeout(() => {
+                    latestTranscriptEl.classList.remove('ring-2', 'ring-blue-300');
+                }, 2000);
+            }
+        }
+    });
+    
+    // Handle upload errors
+    socket.on('upload_error', (data) => {
+        console.error('Upload error received:', data);
+        updateGroup(data.group, { 
+            uploadError: data.error,
+            isActive: true
+        });
+    });
+    
+    // Heartbeat and connection event handlers
+    socket.on('admin_heartbeat_ack', () => {
+        lastHeartbeatTime = Date.now();
+        console.log('💓 Admin heartbeat acknowledged');
+    });
+    
+    socket.on('connect', () => {
+        console.log('🔌 Admin socket connected');
+        updateConnectionStatus(true);
+        lastHeartbeatTime = Date.now();
+        
+        // Rejoin current session if we have one
+        if (sessionCode) {
+            socket.emit('admin_join', { code: sessionCode });
+            console.log(`🔄 Rejoining session: ${sessionCode}`);
+        }
+    });
+    
+    socket.on('disconnect', () => {
+        console.log('🔌 Admin socket disconnected');
+        updateConnectionStatus(false);
+    });
+    
+    socket.on('reconnect', () => {
+        console.log('🔌 Admin socket reconnected');
+        updateConnectionStatus(true);
+        lastHeartbeatTime = Date.now();
+        
+        // Rejoin current session if we have one
+        if (sessionCode) {
+            socket.emit('admin_join', { code: sessionCode });
+            console.log(`🔄 Rejoining session after reconnect: ${sessionCode}`);
+        }
+    });
+    
+    // Button handlers
+    document.getElementById('startBtn').addEventListener('click', async () => {
+        try {
+            const intervalSeconds = parseInt(document.getElementById('intervalInput').value) || 30;
+            const intervalMs = intervalSeconds * 1000;
+            
+            const response = await fetch(`/api/session/${sessionCode}/start`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ interval: intervalMs })
             });
             
-            // Add subtle animation to show update
-            const groupEl = document.getElementById(`group-${data.group}`);
-            if (groupEl) {
-                groupEl.classList.add('animate-bounce-subtle');
-                setTimeout(() => groupEl.classList.remove('animate-bounce-subtle'), 1000);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
-        });
+            
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('startBtn').classList.add('opacity-50', 'cursor-not-allowed');
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('stopBtn').classList.remove('opacity-50', 'cursor-not-allowed');
+            
+            // Disable interval input while recording
+            document.getElementById('intervalInput').disabled = true;
+            document.getElementById('intervalInput').classList.add('opacity-50', 'cursor-not-allowed');
+            
+            showTemporaryMessage('Recording started successfully!', 'success');
+        } catch (err) {
+            console.error('Failed to start session:', err);
+            showErrorToast(`Failed to start recording: ${err.message}`);
+        }
+    });
+    
+    document.getElementById('stopBtn').addEventListener('click', async () => {
+        try {
+            const response = await fetch(`/api/session/${sessionCode}/stop`, { method: 'POST' });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('startBtn').classList.remove('opacity-50', 'cursor-not-allowed');
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('stopBtn').classList.add('opacity-50', 'cursor-not-allowed');
+            
+            // Re-enable interval input
+            document.getElementById('intervalInput').disabled = false;
+            document.getElementById('intervalInput').classList.remove('opacity-50', 'cursor-not-allowed');
+            
+            showTemporaryMessage('Recording stopped successfully!', 'success');
+        } catch (err) {
+            console.error('Failed to stop session:', err);
+            showErrorToast(`Failed to stop recording: ${err.message}`);
+        }
+    });
+    
+    // Quit confirmation handlers
+    let hasStartedRecording = false;
+    
+    // Track if recording has started
+    document.getElementById('startBtn').addEventListener('click', () => {
+        hasStartedRecording = true;
+    });
+    
+    // Handle page unload - save data if session has started
+    window.addEventListener('unload', async () => {
+        // Stop heartbeat system
+        stopHeartbeat();
         
-        // Button handlers
-        document.getElementById('startBtn').addEventListener('click', async () => {
+        if (hasStartedRecording && sessionCode) {
             try {
-                const intervalSeconds = parseInt(document.getElementById('intervalInput').value) || 30;
-                const intervalMs = intervalSeconds * 1000;
-                
-                await fetch(`/api/session/${sessionCode}/start`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ interval: intervalMs })
-                });
-                document.getElementById('startBtn').disabled = true;
-                document.getElementById('startBtn').classList.add('opacity-50', 'cursor-not-allowed');
-                document.getElementById('stopBtn').disabled = false;
-                document.getElementById('stopBtn').classList.remove('opacity-50', 'cursor-not-allowed');
-                
-                // Disable interval input while recording
-                document.getElementById('intervalInput').disabled = true;
-                document.getElementById('intervalInput').classList.add('opacity-50', 'cursor-not-allowed');
+                // Use sendBeacon for reliable data sending during page unload
+                const data = JSON.stringify({});
+                navigator.sendBeacon(`/api/session/${sessionCode}/stop`, data);
             } catch (err) {
-                console.error('Failed to start session:', err);
+                console.error('Failed to save session on unload:', err);
             }
-        });
+        }
+    });
+    
+    // Cleanup on page beforeunload
+    window.addEventListener('beforeunload', (e) => {
+        stopHeartbeat();
         
-        document.getElementById('stopBtn').addEventListener('click', async () => {
-            try {
-                await fetch(`/api/session/${sessionCode}/stop`, { method: 'POST' });
-                document.getElementById('startBtn').disabled = false;
-                document.getElementById('startBtn').classList.remove('opacity-50', 'cursor-not-allowed');
-                document.getElementById('stopBtn').disabled = true;
-                document.getElementById('stopBtn').classList.add('opacity-50', 'cursor-not-allowed');
-                
-                // Re-enable interval input
-                document.getElementById('intervalInput').disabled = false;
-                document.getElementById('intervalInput').classList.remove('opacity-50', 'cursor-not-allowed');
-            } catch (err) {
-                console.error('Failed to stop session:', err);
+        if (hasStartedRecording) {
+            const message = 'Are you sure you want to leave? If you have started recording, the session data will be saved to the database, but the session will be ended.';
+            e.preventDefault();
+            e.returnValue = message;
+            return message;
+        }
+    });
+    
+    // Handle history link with confirmation
+    document.querySelector('a[href="/history"]').addEventListener('click', (e) => {
+        if (hasStartedRecording) {
+            const confirmed = confirm('Are you sure you want to leave? If you have started recording, the session data will be saved to the database, but the session will be ended.');
+            if (!confirmed) {
+                e.preventDefault();
+                return false;
             }
-        });
+        }
+    });
   </script>
 </body>
 </html>
